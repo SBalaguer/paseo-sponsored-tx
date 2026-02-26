@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free NFT Ticket Minter</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .container {
+      max-width: 480px;
+      width: 100%;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: #e6007a;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: 0.9rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover:not(:disabled) { opacity: 0.85; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #connectBtn {
+      background: #e6007a;
+      color: white;
+    }
+    #mintBtn {
+      background: #6c3aed;
+      color: white;
+    }
+    .status {
+      margin-top: 1rem;
+      padding: 0.8rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      word-break: break-all;
+      display: none;
+    }
+    .status.success { display: block; background: #064e3b; border: 1px solid #10b981; }
+    .status.error { display: block; background: #450a0a; border: 1px solid #ef4444; }
+    .status.info { display: block; background: #1e1b4b; border: 1px solid #6366f1; }
+    .wallet-info {
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-bottom: 1rem;
+    }
+    .wallet-info span { color: #e6007a; font-family: monospace; }
+    a { color: #e6007a; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Free NFT Ticket</h1>
+    <p class="subtitle">Mint your event ticket on Passet Hub — zero gas fees</p>
+
+    <div class="card">
+      <div id="walletSection">
+        <button id="connectBtn" onclick="connectWallet()">Connect MetaMask</button>
+      </div>
+      <div id="mintSection" style="display:none">
+        <div class="wallet-info">Connected: <span id="walletAddr"></span></div>
+        <button id="mintBtn" onclick="mintTicket()">Mint Free Ticket</button>
+      </div>
+      <div id="statusBox" class="status"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+  <script>
+    // When deployed, frontend is served from the same Express server
+    const SERVER_URL = window.location.port === '8080'
+      ? 'http://localhost:3000'
+      : '';
+
+    const CHAIN_ID_HEX = '0x' + (420420417).toString(16);
+    const CHAIN_ID = 420420417;
+
+    let provider, signer, userAddress;
+    let config = null;
+
+    async function fetchConfig() {
+      if (config) return config;
+      const res = await fetch(`${SERVER_URL}/api/config`);
+      config = await res.json();
+      return config;
+    }
+
+    function setStatus(msg, type) {
+      const box = document.getElementById('statusBox');
+      box.className = 'status ' + type;
+      box.innerHTML = msg;
+    }
+
+    async function switchChain() {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: CHAIN_ID_HEX }],
+        });
+      } catch (switchError) {
+        if (switchError.code === 4902) {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: CHAIN_ID_HEX,
+              chainName: 'Passet Hub Testnet',
+              nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
+              rpcUrls: ['https://eth-rpc-testnet.polkadot.io/'],
+              blockExplorerUrls: ['https://blockscout-testnet.polkadot.io'],
+            }],
+          });
+        } else {
+          throw switchError;
+        }
+      }
+    }
+
+    async function connectWallet() {
+      try {
+        if (!window.ethereum) {
+          setStatus('MetaMask not detected. Please install it.', 'error');
+          return;
+        }
+
+        await switchChain();
+
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer = await provider.getSigner();
+        userAddress = await signer.getAddress();
+
+        document.getElementById('walletSection').style.display = 'none';
+        document.getElementById('mintSection').style.display = 'block';
+        document.getElementById('walletAddr').textContent =
+          userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
+
+        setStatus('Wallet connected!', 'success');
+      } catch (e) {
+        setStatus('Connection failed: ' + e.message, 'error');
+      }
+    }
+
+    async function mintTicket() {
+      const mintBtn = document.getElementById('mintBtn');
+      mintBtn.disabled = true;
+      mintBtn.textContent = 'Minting...';
+
+      try {
+        const cfg = await fetchConfig();
+
+        setStatus('Fetching nonce...', 'info');
+        const nonceRes = await fetch(`${SERVER_URL}/api/nonce/${userAddress}`);
+        const { nonce } = await nonceRes.json();
+
+        // Build EIP-712 typed data
+        const domain = {
+          name: 'TicketForwarder',
+          version: '1',
+          chainId: CHAIN_ID,
+          verifyingContract: cfg.forwarderAddress,
+        };
+
+        const types = {
+          ForwardRequest: [
+            { name: 'from', type: 'address' },
+            { name: 'to', type: 'address' },
+            { name: 'value', type: 'uint256' },
+            { name: 'gas', type: 'uint256' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'deadline', type: 'uint48' },
+            { name: 'data', type: 'bytes' },
+          ],
+        };
+
+        // Encode mint() call
+        const mintData = new ethers.Interface(['function mint()']).encodeFunctionData('mint');
+        const deadline = Math.floor(Date.now() / 1000) + 3600;
+
+        const message = {
+          from: userAddress,
+          to: cfg.ticketNFTAddress,
+          value: 0,
+          gas: 500000,
+          nonce: parseInt(nonce),
+          deadline: deadline,
+          data: mintData,
+        };
+
+        setStatus('Please sign the request in MetaMask...', 'info');
+        const signature = await signer.signTypedData(domain, types, message);
+
+        const request = {
+          from: userAddress,
+          to: cfg.ticketNFTAddress,
+          value: '0',
+          gas: '500000',
+          deadline: deadline,
+          data: mintData,
+          signature: signature,
+        };
+
+        setStatus('Relaying transaction (you pay zero gas)...', 'info');
+        const relayRes = await fetch(`${SERVER_URL}/api/relay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ request }),
+        });
+
+        const result = await relayRes.json();
+
+        if (!relayRes.ok) {
+          throw new Error(result.error || 'Relay failed');
+        }
+
+        const explorerUrl = `https://blockscout-testnet.polkadot.io/tx/${result.txHash}`;
+        setStatus(
+          `NFT minted successfully!<br>` +
+          `Tx: <a href="${explorerUrl}" target="_blank">${result.txHash.slice(0, 18)}...</a><br>` +
+          `Block: ${result.blockNumber}`,
+          'success'
+        );
+
+        mintBtn.textContent = 'Already Minted';
+      } catch (e) {
+        setStatus('Mint failed: ' + e.message, 'error');
+        mintBtn.disabled = false;
+        mintBtn.textContent = 'Mint Free Ticket';
+      }
+    }
+  </script>
+</body>
+</html>
