@@ -3,142 +3,531 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Free NFT Ticket Minter</title>
+  <title>Meta-TX Developer Dashboard</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
       background: #0a0a0a;
       color: #e0e0e0;
       min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
       display: flex;
-      justify-content: center;
       align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #222;
+      background: #111;
     }
-    .container {
-      max-width: 480px;
-      width: 100%;
-      padding: 2rem;
+    .header h1 { font-size: 1.1rem; color: #e6007a; }
+    .connection-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid #333;
     }
-    h1 {
-      font-size: 1.5rem;
-      margin-bottom: 0.5rem;
-      color: #e6007a;
+    .connection-badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #666;
     }
-    .subtitle {
-      color: #888;
-      margin-bottom: 2rem;
-      font-size: 0.9rem;
+    .connection-badge.connected .dot { background: #10b981; }
+    .connection-badge.disconnected .dot { background: #ef4444; }
+    .connection-badge.connecting .dot { background: #f59e0b; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* System Info */
+    .system-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 0.5rem;
+      padding: 1rem 1.5rem;
+      background: #111;
+      border-bottom: 1px solid #222;
+      font-size: 0.75rem;
     }
+    .info-item { display: flex; gap: 0.5rem; }
+    .info-label { color: #666; white-space: nowrap; }
+    .info-value { color: #aaa; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Main layout */
+    .main {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      height: calc(100vh - 130px);
+    }
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; }
+    }
+
+    /* Left column */
+    .left-col {
+      border-right: 1px solid #222;
+      padding: 1.5rem;
+      overflow-y: auto;
+    }
+
+    /* Wallet + Mint */
     .card {
       background: #1a1a1a;
       border: 1px solid #333;
-      border-radius: 12px;
-      padding: 1.5rem;
+      border-radius: 10px;
+      padding: 1.2rem;
       margin-bottom: 1rem;
     }
+    .card h2 { font-size: 0.85rem; color: #888; margin-bottom: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
     button {
       width: 100%;
-      padding: 0.9rem;
+      padding: 0.7rem;
       border: none;
-      border-radius: 8px;
-      font-size: 1rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
       font-weight: 600;
       cursor: pointer;
-      transition: opacity 0.2s;
+      font-family: inherit;
+      transition: opacity 0.15s;
     }
     button:hover:not(:disabled) { opacity: 0.85; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-metamask {
-      background: #e6007a;
-      color: white;
-      margin-bottom: 0.75rem;
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-metamask { background: #e6007a; color: white; margin-bottom: 0.5rem; }
+    .btn-polkadot { background: #552bbf; color: white; }
+    #mintBtn { background: #6c3aed; color: white; }
+    .or-divider { text-align: center; color: #555; font-size: 0.75rem; margin: 0.4rem 0; }
+    .wallet-info { font-size: 0.8rem; color: #aaa; margin-bottom: 0.8rem; }
+    .wallet-info span { color: #e6007a; }
+
+    /* Pipeline stepper */
+    .pipeline { display: none; }
+    .pipeline.active { display: block; }
+    .pipeline h2 { font-size: 0.85rem; color: #888; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.5rem 0;
+      position: relative;
     }
-    .btn-polkadot {
-      background: #552bbf;
-      color: white;
+    .step:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      left: 11px;
+      top: 28px;
+      bottom: -4px;
+      width: 2px;
+      background: #333;
     }
-    #mintBtn {
-      background: #6c3aed;
-      color: white;
+    .step.done:not(:last-child)::after { background: #10b981; }
+    .step.active:not(:last-child)::after { background: #333; }
+    .step-icon {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      border: 2px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      flex-shrink: 0;
+      color: #555;
+      position: relative;
+      z-index: 1;
+      background: #0a0a0a;
     }
-    .status {
-      margin-top: 1rem;
-      padding: 0.8rem;
-      border-radius: 8px;
-      font-size: 0.85rem;
-      word-break: break-all;
-      display: none;
+    .step.done .step-icon { border-color: #10b981; color: #10b981; background: #064e3b; }
+    .step.active .step-icon { border-color: #f59e0b; color: #f59e0b; background: #451a03; animation: pulse 1.5s infinite; }
+    .step.failed .step-icon { border-color: #ef4444; color: #ef4444; background: #450a0a; }
+    .step-text { font-size: 0.8rem; padding-top: 2px; }
+    .step-text .step-label { color: #ccc; }
+    .step.done .step-label { color: #10b981; }
+    .step.active .step-label { color: #f59e0b; }
+    .step.failed .step-label { color: #ef4444; }
+    .step-detail { font-size: 0.7rem; color: #666; margin-top: 2px; }
+
+    /* Right column: event log */
+    .right-col {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
-    .status.success { display: block; background: #064e3b; border: 1px solid #10b981; }
-    .status.error { display: block; background: #450a0a; border: 1px solid #ef4444; }
-    .status.info { display: block; background: #1e1b4b; border: 1px solid #6366f1; }
-    .wallet-info {
-      font-size: 0.85rem;
-      color: #aaa;
-      margin-bottom: 1rem;
+    .log-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #222;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
-    .wallet-info span { color: #e6007a; font-family: monospace; }
-    a { color: #e6007a; }
-    .or-divider {
-      text-align: center;
-      color: #666;
-      font-size: 0.85rem;
-      margin: 0.5rem 0;
+    .log-header h2 { font-size: 0.85rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .log-header button {
+      width: auto;
+      padding: 0.3rem 0.6rem;
+      background: #222;
+      color: #888;
+      border-radius: 4px;
+      font-size: 0.7rem;
+    }
+    .event-log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+      font-size: 0.75rem;
+    }
+    .log-entry {
+      padding: 0.4rem 0.6rem;
+      margin-bottom: 2px;
+      border-radius: 4px;
+      border-left: 3px solid transparent;
+      display: grid;
+      grid-template-columns: 70px 140px 1fr;
+      gap: 0.5rem;
+      align-items: baseline;
+    }
+    .log-entry:hover { background: #1a1a1a; }
+    .log-time { color: #555; }
+    .log-event { font-weight: 600; }
+    .log-data { color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Event type colors */
+    .log-entry[data-event="statement:submitted"] { border-left-color: #6366f1; }
+    .log-entry[data-event="statement:submitted"] .log-event { color: #6366f1; }
+    .log-entry[data-event="statement:received"] { border-left-color: #8b5cf6; }
+    .log-entry[data-event="statement:received"] .log-event { color: #8b5cf6; }
+    .log-entry[data-event="tx:verifying"] { border-left-color: #f59e0b; }
+    .log-entry[data-event="tx:verifying"] .log-event { color: #f59e0b; }
+    .log-entry[data-event="tx:submitted"] { border-left-color: #3b82f6; }
+    .log-entry[data-event="tx:submitted"] .log-event { color: #3b82f6; }
+    .log-entry[data-event="tx:confirmed"] { border-left-color: #10b981; }
+    .log-entry[data-event="tx:confirmed"] .log-event { color: #10b981; }
+    .log-entry[data-event="tx:failed"] { border-left-color: #ef4444; }
+    .log-entry[data-event="tx:failed"] .log-event { color: #ef4444; }
+    .log-entry[data-event="daemon:health"] { border-left-color: #374151; }
+    .log-entry[data-event="daemon:health"] .log-event { color: #555; }
+    .log-entry[data-event="connected"] { border-left-color: #10b981; }
+    .log-entry[data-event="connected"] .log-event { color: #10b981; }
+
+    .empty-log { color: #444; text-align: center; padding: 3rem; }
+
+    /* Account picker */
+    #accountPicker { display: none; }
+    #accountPicker.active { display: block; }
+    .account-list { list-style: none; margin: 0.5rem 0 0; }
+    .account-list li {
+      padding: 0.5rem 0.6rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      margin-bottom: 0.4rem;
+      cursor: pointer;
+      font-size: 0.8rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.15s;
+    }
+    .account-list li:hover { border-color: #e6007a; }
+    .account-list .acct-addr { color: #ccc; font-family: inherit; }
+    .account-list .acct-name { color: #888; font-size: 0.7rem; }
+    .account-picker-back {
+      width: auto;
+      background: none;
+      color: #888;
+      font-size: 0.75rem;
+      padding: 0;
+      text-decoration: underline;
+      margin-top: 0.5rem;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Free NFT Ticket</h1>
-    <p class="subtitle">Mint your event ticket on Passet Hub — zero gas fees</p>
+  <!-- Header -->
+  <div class="header">
+    <h1>Meta-TX Dashboard</h1>
+    <div id="connBadge" class="connection-badge connecting">
+      <div class="dot"></div>
+      <span id="connText">Connecting...</span>
+    </div>
+  </div>
 
-    <div class="card">
-      <div id="walletSection">
-        <button class="btn-metamask" onclick="connectMetaMask()">Connect MetaMask (EVM)</button>
-        <div class="or-divider">or</div>
-        <button class="btn-polkadot" onclick="connectPolkadot()">Connect Polkadot Wallet (sr25519)</button>
+  <!-- System Info -->
+  <div class="system-info" id="systemInfo">
+    <div class="info-item"><span class="info-label">Relayer:</span><span class="info-value" id="infoRelayer">--</span></div>
+    <div class="info-item"><span class="info-label">Balance:</span><span class="info-value" id="infoBalance">--</span></div>
+    <div class="info-item"><span class="info-label">Proxy (SS58):</span><span class="info-value" id="infoProxy">--</span></div>
+    <div class="info-item"><span class="info-label">Forwarder:</span><span class="info-value" id="infoForwarder">--</span></div>
+    <div class="info-item"><span class="info-label">SubstrateForwarder:</span><span class="info-value" id="infoSubForwarder">--</span></div>
+    <div class="info-item"><span class="info-label">TicketNFT:</span><span class="info-value" id="infoNFT">--</span></div>
+    <div class="info-item"><span class="info-label">People Chain:</span><span class="info-value" id="infoPeople">--</span></div>
+    <div class="info-item"><span class="info-label">Processed:</span><span class="info-value" id="infoProcessed">--</span></div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Left: wallet + pipeline -->
+    <div class="left-col">
+      <!-- Wallet connect -->
+      <div class="card" id="walletCard">
+        <h2>Wallet</h2>
+        <div id="walletSection">
+          <button class="btn-metamask" onclick="connectMetaMask()">Connect MetaMask (EVM)</button>
+          <div class="or-divider">or</div>
+          <button class="btn-polkadot" onclick="connectPolkadot()">Connect Polkadot Wallet</button>
+        </div>
+        <div id="accountPicker">
+          <div style="font-size:0.8rem;color:#aaa;margin-bottom:0.3rem" id="pickerLabel">Select account:</div>
+          <ul class="account-list" id="accountList"></ul>
+          <button class="account-picker-back" onclick="showWalletButtons()">Back</button>
+        </div>
+        <div id="mintSection" style="display:none">
+          <div class="wallet-info" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Connected: <span id="walletAddr"></span></span>
+            <a href="#" onclick="disconnectWallet(); return false" style="color:#888;font-size:0.75rem;text-decoration:underline">Disconnect</a>
+          </div>
+          <button id="mintBtn" onclick="mintTicket()">Mint Free Ticket</button>
+        </div>
       </div>
-      <div id="mintSection" style="display:none">
-        <div class="wallet-info">Connected: <span id="walletAddr"></span></div>
-        <button id="mintBtn" onclick="mintTicket()">Mint Free Ticket</button>
+
+      <!-- Pipeline stepper -->
+      <div class="card pipeline" id="pipelineCard">
+        <h2>Transaction Pipeline</h2>
+        <div class="step" id="step-signed">
+          <div class="step-icon">1</div>
+          <div class="step-text">
+            <div class="step-label">Signed</div>
+            <div class="step-detail" id="step-signed-detail"></div>
+          </div>
+        </div>
+        <div class="step" id="step-submitted">
+          <div class="step-icon">2</div>
+          <div class="step-text">
+            <div class="step-label">Statement Submitted</div>
+            <div class="step-detail" id="step-submitted-detail"></div>
+          </div>
+        </div>
+        <div class="step" id="step-received">
+          <div class="step-icon">3</div>
+          <div class="step-text">
+            <div class="step-label">Picked Up by Relayer</div>
+            <div class="step-detail" id="step-received-detail"></div>
+          </div>
+        </div>
+        <div class="step" id="step-executed">
+          <div class="step-icon">4</div>
+          <div class="step-text">
+            <div class="step-label">Executed on Asset Hub</div>
+            <div class="step-detail" id="step-executed-detail"></div>
+          </div>
+        </div>
+        <div class="step" id="step-confirmed">
+          <div class="step-icon">5</div>
+          <div class="step-text">
+            <div class="step-label">Confirmed</div>
+            <div class="step-detail" id="step-confirmed-detail"></div>
+          </div>
+        </div>
       </div>
-      <div id="statusBox" class="status"></div>
+    </div>
+
+    <!-- Right: event log -->
+    <div class="right-col">
+      <div class="log-header">
+        <h2>Live Event Log</h2>
+        <button onclick="clearLog()">Clear</button>
+      </div>
+      <div class="event-log" id="eventLog">
+        <div class="empty-log" id="emptyLog">Waiting for events...</div>
+      </div>
     </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
   <script>
-    // When deployed, frontend is served from the same Express server
-    const SERVER_URL = window.location.port === '8080'
-      ? 'http://localhost:3000'
-      : '';
-
-    const CHAIN_ID_HEX = '0x' + (420420417).toString(16);
-    const CHAIN_ID = 420420417;
+    // --- Configuration ---
+    const DAEMON_URL = 'http://localhost:3001';
 
     let provider, signer, userAddress;
     let config = null;
-    let walletType = null; // 'metamask' or 'polkadot'
-
-    // Polkadot wallet state
+    let walletType = null;
     let polkadotAccount = null;
     let polkadotInjector = null;
+    let currentCorrelationId = null;
+
+    // --- SSE Client ---
+    let eventSource = null;
+
+    function connectSSE() {
+      setBadge('connecting');
+      eventSource = new EventSource(`${DAEMON_URL}/events`);
+
+      eventSource.onopen = () => setBadge('connected');
+
+      eventSource.onerror = () => {
+        setBadge('disconnected');
+        // EventSource auto-reconnects
+      };
+
+      // Listen for all lifecycle events
+      const events = [
+        'connected',
+        'statement:submitted', 'statement:received',
+        'tx:verifying', 'tx:submitted', 'tx:confirmed', 'tx:failed',
+        'daemon:health',
+      ];
+      events.forEach(evt => {
+        eventSource.addEventListener(evt, (e) => {
+          const data = JSON.parse(e.data);
+          addLogEntry(evt, data);
+          routeToStepper(evt, data);
+        });
+      });
+    }
+
+    function setBadge(state) {
+      const badge = document.getElementById('connBadge');
+      const text = document.getElementById('connText');
+      badge.className = 'connection-badge ' + state;
+      text.textContent = state === 'connected' ? 'Connected' : state === 'connecting' ? 'Connecting...' : 'Disconnected';
+    }
+
+    // --- Event Log ---
+
+    function addLogEntry(event, data) {
+      const log = document.getElementById('eventLog');
+      const empty = document.getElementById('emptyLog');
+      if (empty) empty.remove();
+
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.dataset.event = event;
+
+      const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+      const dataStr = Object.entries(data)
+        .filter(([k]) => k !== 'timestamp')
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ');
+
+      entry.innerHTML = `<span class="log-time">${ts}</span><span class="log-event">${event}</span><span class="log-data">${dataStr}</span>`;
+
+      // Insert at top (newest first)
+      log.insertBefore(entry, log.firstChild);
+
+      // Cap at 200 entries
+      while (log.children.length > 200) {
+        log.removeChild(log.lastChild);
+      }
+    }
+
+    function clearLog() {
+      const log = document.getElementById('eventLog');
+      log.innerHTML = '<div class="empty-log" id="emptyLog">Waiting for events...</div>';
+    }
+
+    // --- Pipeline stepper ---
+
+    const STEP_MAP = {
+      'statement:submitted': 'step-submitted',
+      'statement:received': 'step-received',
+      'tx:verifying': 'step-executed',
+      'tx:submitted': 'step-executed',
+      'tx:confirmed': 'step-confirmed',
+      'tx:failed': null, // special handling
+    };
+
+    function routeToStepper(event, data) {
+      if (!currentCorrelationId) return;
+      if (data.correlationId !== currentCorrelationId) return;
+
+      if (event === 'tx:failed') {
+        // Mark the current active step as failed
+        document.querySelectorAll('.step.active').forEach(s => {
+          s.classList.remove('active');
+          s.classList.add('failed');
+        });
+        const mintBtn = document.getElementById('mintBtn');
+        mintBtn.textContent = 'Failed — Try Again';
+        mintBtn.disabled = false;
+        return;
+      }
+
+      const stepId = STEP_MAP[event];
+      if (!stepId) return;
+
+      // Mark previous steps as done
+      const steps = ['step-signed', 'step-submitted', 'step-received', 'step-executed', 'step-confirmed'];
+      const targetIdx = steps.indexOf(stepId);
+
+      steps.forEach((id, idx) => {
+        const el = document.getElementById(id);
+        if (idx < targetIdx) {
+          el.classList.remove('active');
+          el.classList.add('done');
+        } else if (idx === targetIdx) {
+          el.classList.remove('active');
+          el.classList.add(event === 'tx:confirmed' ? 'done' : 'active');
+        }
+      });
+
+      // Set detail text
+      const detail = document.getElementById(stepId + '-detail');
+      if (event === 'statement:submitted') {
+        detail.textContent = `Status: ${data.status || 'new'}`;
+      } else if (event === 'statement:received') {
+        detail.textContent = 'Statement picked up from People Chain';
+      } else if (event === 'tx:verifying') {
+        detail.textContent = 'Verifying signature...';
+      } else if (event === 'tx:submitted') {
+        detail.textContent = `TX: ${data.txHash ? data.txHash.slice(0, 10) + '...' : ''}`;
+      } else if (event === 'tx:confirmed') {
+        detail.textContent = `Block #${data.blockNumber} | Gas: ${data.gasUsed}`;
+        const mintBtn = document.getElementById('mintBtn');
+        mintBtn.textContent = 'Confirmed!';
+      }
+
+      // Update daemon:health processed count
+      if (event === 'daemon:health' && data.processedCount !== undefined) {
+        document.getElementById('infoProcessed').textContent = data.processedCount;
+      }
+    }
+
+    function resetPipeline() {
+      ['step-signed', 'step-submitted', 'step-received', 'step-executed', 'step-confirmed'].forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.remove('done', 'active', 'failed');
+        document.getElementById(id + '-detail').textContent = '';
+      });
+    }
+
+    // --- System Info ---
+
+    async function fetchDaemonInfo() {
+      try {
+        const res = await fetch(`${DAEMON_URL}/api/daemon-info`);
+        const info = await res.json();
+        document.getElementById('infoRelayer').textContent = info.relayer;
+        document.getElementById('infoBalance').textContent = info.balance + ' DOT';
+        document.getElementById('infoProxy').textContent = info.proxySS58;
+        document.getElementById('infoForwarder').textContent = info.forwarderAddress;
+        document.getElementById('infoSubForwarder').textContent = info.substrateForwarderAddress;
+        document.getElementById('infoNFT').textContent = info.ticketNFTAddress;
+        document.getElementById('infoPeople').textContent = info.peopleChainWs;
+        document.getElementById('infoProcessed').textContent = info.processedCount;
+      } catch {
+        // Daemon not reachable yet
+      }
+    }
+
+    // --- Config ---
 
     async function fetchConfig() {
       if (config) return config;
-      const res = await fetch(`${SERVER_URL}/api/config`);
+      const res = await fetch(`${DAEMON_URL}/api/config`);
       config = await res.json();
       return config;
     }
 
-    function setStatus(msg, type) {
-      const box = document.getElementById('statusBox');
-      box.className = 'status ' + type;
-      box.innerHTML = msg;
-    }
-
-    // === SS58 / Substrate Utilities ===
+    // --- SS58 Utilities ---
 
     const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -158,170 +547,165 @@
           carry >>= 8;
         }
       }
-      // Leading '1's → leading zeros
-      for (let i = 0; i < str.length && str[i] === '1'; i++) {
-        bytes.push(0);
-      }
+      for (let i = 0; i < str.length && str[i] === '1'; i++) bytes.push(0);
       return new Uint8Array(bytes.reverse());
     }
 
     function ss58ToPublicKeyHex(ss58Address) {
       const decoded = base58Decode(ss58Address);
-      // SS58 format: [prefix byte(s)] [32-byte pubkey] [2-byte checksum]
-      // Simple prefix (1 byte) → pubkey at bytes 1..33
-      // Multi-byte prefix → pubkey at bytes 2..34
       const prefixLen = decoded[0] < 64 ? 1 : 2;
       const pubkey = decoded.slice(prefixLen, prefixLen + 32);
       if (pubkey.length !== 32) throw new Error('Invalid SS58 address');
       return '0x' + Array.from(pubkey).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    function pubkeyToH160(pubkeyHex) {
-      const clean = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex;
-      const suffix = clean.slice(40).toLowerCase();
-      if (suffix === 'eeeeeeeeeeeeeeeeeeeeeeee') {
-        return '0x' + clean.slice(0, 40);
-      }
-      const hash = ethers.keccak256('0x' + clean);
-      return '0x' + hash.slice(26);
-    }
-
-    // === MetaMask Connection ===
+    // --- MetaMask ---
 
     async function switchChain() {
+      const cfg = await fetchConfig();
+      const chainIdHex = '0x' + cfg.chainId.toString(16);
       try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: CHAIN_ID_HEX }],
-        });
+        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainIdHex }] });
       } catch (switchError) {
         if (switchError.code === 4902) {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: CHAIN_ID_HEX,
-              chainName: 'Passet Hub Testnet',
-              nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
-              rpcUrls: ['https://eth-rpc-testnet.polkadot.io/'],
-              blockExplorerUrls: ['https://blockscout-testnet.polkadot.io'],
-            }],
+            params: [{ chainId: chainIdHex, chainName: 'Preview Net Asset Hub', nativeCurrency: { name: 'DOT', symbol: 'DOT', decimals: 18 }, rpcUrls: [cfg.rpcUrl] }],
           });
-        } else {
-          throw switchError;
-        }
+        } else throw switchError;
       }
     }
 
     async function connectMetaMask() {
       try {
-        if (!window.ethereum) {
-          setStatus('MetaMask not detected. Please install it.', 'error');
-          return;
-        }
-
+        if (!window.ethereum) { alert('MetaMask not detected'); return; }
         await switchChain();
-
         provider = new ethers.BrowserProvider(window.ethereum);
-        signer = await provider.getSigner();
-        userAddress = await signer.getAddress();
-        walletType = 'metamask';
-
-        document.getElementById('walletSection').style.display = 'none';
-        document.getElementById('mintSection').style.display = 'block';
-        document.getElementById('walletAddr').textContent =
-          userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
-
-        setStatus('MetaMask wallet connected!', 'success');
-      } catch (e) {
-        setStatus('Connection failed: ' + e.message, 'error');
-      }
+        const accounts = await provider.listAccounts();
+        if (accounts.length === 0) { alert('No accounts found'); return; }
+        if (accounts.length === 1) {
+          await selectMetaMaskAccount(0);
+        } else {
+          showAccountPicker(accounts.map((a, i) => ({
+            label: a.address.slice(0, 6) + '...' + a.address.slice(-4),
+            name: `Account ${i + 1}`,
+            onSelect: () => selectMetaMaskAccount(i),
+          })));
+        }
+      } catch (e) { alert('Connection failed: ' + e.message); }
     }
 
-    // === Polkadot Wallet Connection ===
+    async function selectMetaMaskAccount(index) {
+      signer = await provider.getSigner(index);
+      userAddress = await signer.getAddress();
+      walletType = 'metamask';
+      hideAccountPicker();
+      showMintUI(userAddress.slice(0, 6) + '...' + userAddress.slice(-4));
+    }
+
+    // --- Polkadot ---
 
     async function connectPolkadot() {
       try {
-        if (!window.injectedWeb3) {
-          setStatus('No Polkadot wallet detected. Please install Talisman, SubWallet, or Polkadot.js extension.', 'error');
-          return;
-        }
-
-        // Try wallets in order of preference
+        if (!window.injectedWeb3) { alert('No Polkadot wallet detected'); return; }
         const walletNames = ['talisman', 'subwallet-js', 'polkadot-js'];
-        let injector = null;
-        let walletName = null;
-
+        let injector = null, walletName = null;
         for (const name of walletNames) {
           if (window.injectedWeb3[name]) {
-            try {
-              injector = await window.injectedWeb3[name].enable('Free NFT Ticket Minter');
-              walletName = name;
-              break;
-            } catch (e) {
-              console.log(`Failed to enable ${name}:`, e.message);
-            }
+            try { injector = await window.injectedWeb3[name].enable('Meta-TX Dashboard'); walletName = name; break; }
+            catch (e) { console.log(`Failed to enable ${name}:`, e.message); }
           }
         }
-
-        if (!injector) {
-          setStatus('No compatible Polkadot wallet found. Please install Talisman, SubWallet, or Polkadot.js extension.', 'error');
-          return;
-        }
-
+        if (!injector) { alert('No compatible Polkadot wallet found'); return; }
         const accounts = await injector.accounts.get();
-        if (accounts.length === 0) {
-          setStatus('No accounts found in wallet. Please create or import an account.', 'error');
-          return;
+        if (accounts.length === 0) { alert('No accounts found in wallet'); return; }
+        if (accounts.length === 1) {
+          selectPolkadotAccount(accounts[0], injector, walletName);
+        } else {
+          // Store for selection
+          pendingPolkadotInjector = injector;
+          pendingPolkadotWalletName = walletName;
+          showAccountPicker(accounts.map((acct) => ({
+            label: acct.address.slice(0, 6) + '...' + acct.address.slice(-4),
+            name: acct.name || acct.address.slice(0, 10),
+            onSelect: () => selectPolkadotAccount(acct, injector, walletName),
+          })));
         }
-
-        // Use first account
-        polkadotAccount = accounts[0];
-        polkadotInjector = injector;
-        walletType = 'polkadot';
-
-        document.getElementById('walletSection').style.display = 'none';
-        document.getElementById('mintSection').style.display = 'block';
-
-        const addr = polkadotAccount.address;
-        document.getElementById('walletAddr').textContent =
-          addr.slice(0, 6) + '...' + addr.slice(-4) + ` (${walletName})`;
-
-        setStatus('Polkadot wallet connected!', 'success');
-      } catch (e) {
-        setStatus('Connection failed: ' + e.message, 'error');
-      }
+      } catch (e) { alert('Connection failed: ' + e.message); }
     }
 
-    // === Minting ===
+    let pendingPolkadotInjector = null;
+    let pendingPolkadotWalletName = null;
+
+    function selectPolkadotAccount(acct, injector, walletName) {
+      polkadotAccount = acct;
+      polkadotInjector = injector;
+      walletType = 'polkadot';
+      hideAccountPicker();
+      const addr = acct.address;
+      showMintUI(addr.slice(0, 6) + '...' + addr.slice(-4) + ` (${walletName})`);
+    }
+
+    function disconnectWallet() {
+      provider = null; signer = null; userAddress = null;
+      walletType = null; polkadotAccount = null; polkadotInjector = null;
+      config = null; currentCorrelationId = null;
+      document.getElementById('walletSection').style.display = 'block';
+      document.getElementById('mintSection').style.display = 'none';
+      document.getElementById('pipelineCard').classList.remove('active');
+      resetPipeline();
+      const mintBtn = document.getElementById('mintBtn');
+      mintBtn.disabled = false;
+      mintBtn.textContent = 'Mint Free Ticket';
+    }
+
+    function showAccountPicker(accounts) {
+      document.getElementById('walletSection').style.display = 'none';
+      const picker = document.getElementById('accountPicker');
+      const list = document.getElementById('accountList');
+      list.innerHTML = '';
+      accounts.forEach(({ label, name, onSelect }) => {
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="acct-addr">${label}</span><span class="acct-name">${name}</span>`;
+        li.onclick = onSelect;
+        list.appendChild(li);
+      });
+      picker.classList.add('active');
+    }
+
+    function hideAccountPicker() {
+      document.getElementById('accountPicker').classList.remove('active');
+    }
+
+    function showWalletButtons() {
+      hideAccountPicker();
+      document.getElementById('walletSection').style.display = 'block';
+    }
+
+    function showMintUI(label) {
+      document.getElementById('walletSection').style.display = 'none';
+      document.getElementById('mintSection').style.display = 'block';
+      document.getElementById('walletAddr').textContent = label;
+    }
+
+    // --- Minting ---
 
     async function mintTicket() {
-      if (walletType === 'metamask') {
-        await mintViaMetaMask();
-      } else if (walletType === 'polkadot') {
-        await mintViaPolkadot();
-      }
+      if (walletType === 'metamask') await mintViaMetaMask();
+      else if (walletType === 'polkadot') await mintViaPolkadot();
     }
 
     async function mintViaMetaMask() {
       const mintBtn = document.getElementById('mintBtn');
       mintBtn.disabled = true;
-      mintBtn.textContent = 'Minting...';
+      mintBtn.textContent = 'Signing...';
 
       try {
         const cfg = await fetchConfig();
-
-        setStatus('Fetching nonce...', 'info');
-        const nonceRes = await fetch(`${SERVER_URL}/api/nonce/${userAddress}`);
+        const nonceRes = await fetch(`${DAEMON_URL}/api/nonce/${userAddress}`);
         const { nonce } = await nonceRes.json();
 
-        // Build EIP-712 typed data
-        const domain = {
-          name: 'TicketForwarder',
-          version: '1',
-          chainId: CHAIN_ID,
-          verifyingContract: cfg.forwarderAddress,
-        };
-
+        const domain = { name: 'TicketForwarder', version: '1', chainId: cfg.chainId, verifyingContract: cfg.forwarderAddress };
         const types = {
           ForwardRequest: [
             { name: 'from', type: 'address' },
@@ -334,57 +718,40 @@
           ],
         };
 
-        // Encode mint() call
         const mintData = new ethers.Interface(['function mint()']).encodeFunctionData('mint');
         const deadline = Math.floor(Date.now() / 1000) + 3600;
+        const message = { from: userAddress, to: cfg.ticketNFTAddress, value: 0, gas: 500000, nonce: parseInt(nonce), deadline, data: mintData };
 
-        const message = {
-          from: userAddress,
-          to: cfg.ticketNFTAddress,
-          value: 0,
-          gas: 500000,
-          nonce: parseInt(nonce),
-          deadline: deadline,
-          data: mintData,
-        };
-
-        setStatus('Please sign the request in MetaMask...', 'info');
         const signature = await signer.signTypedData(domain, types, message);
 
-        const request = {
-          from: userAddress,
-          to: cfg.ticketNFTAddress,
-          value: '0',
-          gas: '500000',
-          deadline: deadline,
-          data: mintData,
-          signature: signature,
+        // Show pipeline, mark step 1 done
+        resetPipeline();
+        document.getElementById('pipelineCard').classList.add('active');
+        document.getElementById('step-signed').classList.add('done');
+        document.getElementById('step-signed-detail').textContent = 'EIP-712 signature obtained';
+
+        const metaTxRequest = {
+          type: 'ecdsa', from: userAddress, to: cfg.ticketNFTAddress,
+          value: '0', gas: '500000', deadline: deadline.toString(), data: mintData, signature,
         };
 
-        setStatus('Relaying transaction (you pay zero gas)...', 'info');
-        const relayRes = await fetch(`${SERVER_URL}/api/relay`, {
+        mintBtn.textContent = 'Submitting...';
+        const submitRes = await fetch(`${DAEMON_URL}/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ request }),
+          body: JSON.stringify(metaTxRequest),
         });
+        const result = await submitRes.json();
+        if (!submitRes.ok) throw new Error(result.error || 'Submit failed');
 
-        const result = await relayRes.json();
+        currentCorrelationId = result.correlationId;
+        mintBtn.textContent = 'Awaiting Execution...';
 
-        if (!relayRes.ok) {
-          throw new Error(result.error || 'Relay failed');
-        }
-
-        const explorerUrl = `https://blockscout-testnet.polkadot.io/tx/${result.txHash}`;
-        setStatus(
-          `NFT minted successfully!<br>` +
-          `Tx: <a href="${explorerUrl}" target="_blank">${result.txHash.slice(0, 18)}...</a><br>` +
-          `Block: ${result.blockNumber}`,
-          'success'
-        );
-
-        mintBtn.textContent = 'Already Minted';
+        // Mark step 2 as active (will be updated by SSE)
+        document.getElementById('step-submitted').classList.add('active');
+        document.getElementById('step-submitted-detail').textContent = `Status: ${result.status}`;
       } catch (e) {
-        setStatus('Mint failed: ' + e.message, 'error');
+        alert('Mint failed: ' + e.message);
         mintBtn.disabled = false;
         mintBtn.textContent = 'Mint Free Ticket';
       }
@@ -393,94 +760,68 @@
     async function mintViaPolkadot() {
       const mintBtn = document.getElementById('mintBtn');
       mintBtn.disabled = true;
-      mintBtn.textContent = 'Minting...';
+      mintBtn.textContent = 'Signing...';
 
       try {
         const cfg = await fetchConfig();
         const pubkeyHex = ss58ToPublicKeyHex(polkadotAccount.address);
 
-        // 1. Fetch nonce
-        setStatus('Fetching nonce...', 'info');
-        const nonceRes = await fetch(`${SERVER_URL}/api/substrate-nonce/${pubkeyHex}`);
+        const nonceRes = await fetch(`${DAEMON_URL}/api/substrate-nonce/${pubkeyHex}`);
         const nonceData = await nonceRes.json();
         if (!nonceRes.ok) throw new Error(nonceData.error || 'Failed to fetch nonce');
         const nonce = BigInt(nonceData.nonce);
 
-        // 2. Build calldata for mint()
         const mintIface = new ethers.Interface(['function mint()']);
         const callData = mintIface.encodeFunctionData('mint');
-
-        // 3. Set deadline (10 minutes from now)
         const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-
-        // 4. Build message matching SubstrateForwarder._buildMessage()
         const gasLimit = BigInt(5_000_000_000);
+
         const abiCoder = ethers.AbiCoder.defaultAbiCoder();
         const innerMessage = abiCoder.encode(
           ['uint256', 'address', 'bytes32', 'address', 'uint256', 'uint256', 'uint48', 'bytes32'],
-          [
-            BigInt(CHAIN_ID),
-            cfg.substrateForwarderAddress,
-            pubkeyHex,
-            cfg.ticketNFTAddress,
-            gasLimit,
-            nonce,
-            Number(deadline),
-            ethers.keccak256(callData)
-          ]
+          [BigInt(cfg.chainId), cfg.substrateForwarderAddress, pubkeyHex, cfg.ticketNFTAddress, gasLimit, nonce, Number(deadline), ethers.keccak256(callData)]
         );
 
-        // 5. Sign via wallet extension's signRaw
-        // The wallet wraps the payload with <Bytes>...</Bytes> automatically
-        setStatus('Please sign the request in your Polkadot wallet...', 'info');
-        if (!polkadotInjector.signer?.signRaw) {
-          throw new Error('Wallet does not support message signing (signRaw)');
-        }
-
+        if (!polkadotInjector.signer?.signRaw) throw new Error('Wallet does not support signRaw');
         const signResult = await polkadotInjector.signer.signRaw({
-          address: polkadotAccount.address,
-          data: innerMessage,
-          type: 'bytes',
+          address: polkadotAccount.address, data: innerMessage, type: 'bytes',
         });
 
-        console.log('[Polkadot Mint] Signature:', signResult.signature);
+        // Show pipeline, mark step 1 done
+        resetPipeline();
+        document.getElementById('pipelineCard').classList.add('active');
+        document.getElementById('step-signed').classList.add('done');
+        document.getElementById('step-signed-detail').textContent = 'sr25519 signature obtained';
 
-        // 6. POST to substrate relay
-        setStatus('Relaying transaction (you pay zero gas)...', 'info');
-        const relayRes = await fetch(`${SERVER_URL}/api/substrate-relay`, {
+        const metaTxRequest = {
+          type: 'sr25519', from: pubkeyHex, to: cfg.ticketNFTAddress,
+          gas: gasLimit.toString(), deadline: deadline.toString(), data: callData, signature: signResult.signature,
+        };
+
+        mintBtn.textContent = 'Submitting...';
+        const submitRes = await fetch(`${DAEMON_URL}/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            from: pubkeyHex,
-            to: cfg.ticketNFTAddress,
-            gas: gasLimit.toString(),
-            deadline: deadline.toString(),
-            data: callData,
-            signature: signResult.signature,
-          }),
+          body: JSON.stringify(metaTxRequest),
         });
+        const result = await submitRes.json();
+        if (!submitRes.ok) throw new Error(result.error || 'Submit failed');
 
-        const result = await relayRes.json();
+        currentCorrelationId = result.correlationId;
+        mintBtn.textContent = 'Awaiting Execution...';
 
-        if (!relayRes.ok) {
-          throw new Error(result.error || 'Relay failed');
-        }
-
-        const explorerUrl = `https://blockscout-testnet.polkadot.io/tx/${result.txHash}`;
-        setStatus(
-          `NFT minted successfully!<br>` +
-          `Tx: <a href="${explorerUrl}" target="_blank">${result.txHash.slice(0, 18)}...</a><br>` +
-          `Block: ${result.blockNumber}`,
-          'success'
-        );
-
-        mintBtn.textContent = 'Already Minted';
+        document.getElementById('step-submitted').classList.add('active');
+        document.getElementById('step-submitted-detail').textContent = `Status: ${result.status}`;
       } catch (e) {
-        setStatus('Mint failed: ' + e.message, 'error');
+        alert('Mint failed: ' + e.message);
         mintBtn.disabled = false;
         mintBtn.textContent = 'Mint Free Ticket';
       }
     }
+
+    // --- Init ---
+    connectSSE();
+    fetchDaemonInfo();
   </script>
 </body>
 </html>

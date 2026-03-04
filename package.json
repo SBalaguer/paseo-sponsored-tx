@@ -7,9 +7,12 @@
     "compile": "hardhat compile",
     "test": "hardhat test",
     "deploy": "hardhat run scripts/deploy.ts --network passetHub",
+    "deploy:preview": "hardhat run scripts/deploy-preview.ts --network previewNet",
     "test:mint": "hardhat run scripts/test-mint.ts --network passetHub",
     "start": "ts-node server/index.ts",
     "server": "ts-node server/index.ts",
+    "relayer": "ts-node scripts/relayer-daemon.ts",
+    "register-proxy": "ts-node scripts/register-proxy.ts",
     "frontend": "npx serve frontend -l 8080"
   },
   "keywords": [],
@@ -40,10 +43,19 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@noble/curves": "^2.0.1",
     "@openzeppelin/contracts": "^5.4.0",
+    "@polkadot-api/sdk-statement": "^0.4.0",
+    "@polkadot-labs/hdkd": "^0.0.26",
+    "@polkadot-labs/hdkd-helpers": "^0.0.27",
+    "@polkadot/util": "^14.0.1",
+    "@polkadot/util-crypto": "^14.0.1",
     "cors": "^2.8.6",
     "ethers": "^6.16.0",
     "express": "^4.22.1",
-    "express-rate-limit": "^7.5.1"
+    "express-rate-limit": "^7.5.1",
+    "polkadot-api": "^1.23.3",
+    "verifiablejs": "^1.2.0",
+    "ws": "^8.19.0"
   }
 }
