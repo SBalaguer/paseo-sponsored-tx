@@ -6,6 +6,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 
 contract TicketNFT is ERC721, Ownable, ERC2771Context {
+    address public immutable substrateForwarder;
+
     uint256 public maxSupply;
     uint256 public mintDeadline;
     bool public soulbound;
@@ -26,17 +28,23 @@ contract TicketNFT is ERC721, Ownable, ERC2771Context {
         uint256 mintDeadline_,
         bool soulbound_,
         string memory baseTokenURI_,
-        address trustedForwarder
+        address trustedForwarder,
+        address substrateForwarder_
     )
         ERC721(eventName, symbol)
         Ownable(msg.sender)
         ERC2771Context(trustedForwarder)
     {
+        substrateForwarder = substrateForwarder_;
         maxSupply = maxSupply_;
         mintDeadline = mintDeadline_;
         soulbound = soulbound_;
         _baseTokenURI = baseTokenURI_;
         _nextTokenId = 1;
+    }
+
+    function isTrustedForwarder(address forwarder) public view override returns (bool) {
+        return forwarder == substrateForwarder || super.isTrustedForwarder(forwarder);
     }
 
     function mint() external {

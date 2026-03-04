@@ -13,7 +13,15 @@ async function main() {
   const forwarderAddress = await forwarder.getAddress();
   console.log("ERC2771Forwarder deployed to:", forwarderAddress);
 
-  // 2. Deploy TicketNFT
+  // 2. Deploy SubstrateForwarder
+  console.log("\nDeploying SubstrateForwarder...");
+  const SubstrateForwarderFactory = await ethers.getContractFactory("SubstrateForwarder");
+  const substrateForwarder = await SubstrateForwarderFactory.deploy();
+  await substrateForwarder.waitForDeployment();
+  const substrateForwarderAddress = await substrateForwarder.getAddress();
+  console.log("SubstrateForwarder deployed to:", substrateForwarderAddress);
+
+  // 3. Deploy TicketNFT
   const eventName = "Polkadot Meetup 2025";
   const symbol = "PMEET";
   const maxSupply = 500;
@@ -35,7 +43,8 @@ async function main() {
     mintDeadline,
     soulbound,
     baseTokenURI,
-    forwarderAddress
+    forwarderAddress,
+    substrateForwarderAddress
   );
   await ticketNFT.waitForDeployment();
   const ticketAddress = await ticketNFT.getAddress();
@@ -44,6 +53,7 @@ async function main() {
   // Summary
   console.log("\n=== Deployment Summary ===");
   console.log("FORWARDER_ADDRESS=" + forwarderAddress);
+  console.log("SUBSTRATE_FORWARDER_ADDRESS=" + substrateForwarderAddress);
   console.log("TICKET_NFT_ADDRESS=" + ticketAddress);
   console.log("\nAdd these to your .env file.");
 }

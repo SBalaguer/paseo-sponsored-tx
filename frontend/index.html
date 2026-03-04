@@ -49,8 +49,13 @@
     }
     button:hover:not(:disabled) { opacity: 0.85; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #connectBtn {
+    .btn-metamask {
       background: #e6007a;
+      color: white;
+      margin-bottom: 0.75rem;
+    }
+    .btn-polkadot {
+      background: #552bbf;
       color: white;
     }
     #mintBtn {
@@ -75,6 +80,12 @@
     }
     .wallet-info span { color: #e6007a; font-family: monospace; }
     a { color: #e6007a; }
+    .or-divider {
+      text-align: center;
+      color: #666;
+      font-size: 0.85rem;
+      margin: 0.5rem 0;
+    }
   </style>
 </head>
 <body>
@@ -84,7 +95,9 @@
 
     <div class="card">
       <div id="walletSection">
-        <button id="connectBtn" onclick="connectWallet()">Connect MetaMask</button>
+        <button class="btn-metamask" onclick="connectMetaMask()">Connect MetaMask (EVM)</button>
+        <div class="or-divider">or</div>
+        <button class="btn-polkadot" onclick="connectPolkadot()">Connect Polkadot Wallet (sr25519)</button>
       </div>
       <div id="mintSection" style="display:none">
         <div class="wallet-info">Connected: <span id="walletAddr"></span></div>
@@ -106,6 +119,11 @@
 
     let provider, signer, userAddress;
     let config = null;
+    let walletType = null; // 'metamask' or 'polkadot'
+
+    // Polkadot wallet state
+    let polkadotAccount = null;
+    let polkadotInjector = null;
 
     async function fetchConfig() {
       if (config) return config;
@@ -119,6 +137,56 @@
       box.className = 'status ' + type;
       box.innerHTML = msg;
     }
+
+    // === SS58 / Substrate Utilities ===
+
+    const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+    function base58Decode(str) {
+      const bytes = [0];
+      for (let i = 0; i < str.length; i++) {
+        const idx = BASE58_ALPHABET.indexOf(str[i]);
+        if (idx < 0) throw new Error('Invalid base58 character: ' + str[i]);
+        let carry = idx;
+        for (let j = 0; j < bytes.length; j++) {
+          carry += bytes[j] * 58;
+          bytes[j] = carry & 0xff;
+          carry >>= 8;
+        }
+        while (carry > 0) {
+          bytes.push(carry & 0xff);
+          carry >>= 8;
+        }
+      }
+      // Leading '1's → leading zeros
+      for (let i = 0; i < str.length && str[i] === '1'; i++) {
+        bytes.push(0);
+      }
+      return new Uint8Array(bytes.reverse());
+    }
+
+    function ss58ToPublicKeyHex(ss58Address) {
+      const decoded = base58Decode(ss58Address);
+      // SS58 format: [prefix byte(s)] [32-byte pubkey] [2-byte checksum]
+      // Simple prefix (1 byte) → pubkey at bytes 1..33
+      // Multi-byte prefix → pubkey at bytes 2..34
+      const prefixLen = decoded[0] < 64 ? 1 : 2;
+      const pubkey = decoded.slice(prefixLen, prefixLen + 32);
+      if (pubkey.length !== 32) throw new Error('Invalid SS58 address');
+      return '0x' + Array.from(pubkey).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function pubkeyToH160(pubkeyHex) {
+      const clean = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex;
+      const suffix = clean.slice(40).toLowerCase();
+      if (suffix === 'eeeeeeeeeeeeeeeeeeeeeeee') {
+        return '0x' + clean.slice(0, 40);
+      }
+      const hash = ethers.keccak256('0x' + clean);
+      return '0x' + hash.slice(26);
+    }
+
+    // === MetaMask Connection ===
 
     async function switchChain() {
       try {
@@ -144,7 +212,7 @@
       }
     }
 
-    async function connectWallet() {
+    async function connectMetaMask() {
       try {
         if (!window.ethereum) {
           setStatus('MetaMask not detected. Please install it.', 'error');
@@ -156,19 +224,85 @@
         provider = new ethers.BrowserProvider(window.ethereum);
         signer = await provider.getSigner();
         userAddress = await signer.getAddress();
+        walletType = 'metamask';
 
         document.getElementById('walletSection').style.display = 'none';
         document.getElementById('mintSection').style.display = 'block';
         document.getElementById('walletAddr').textContent =
           userAddress.slice(0, 6) + '...' + userAddress.slice(-4);
 
-        setStatus('Wallet connected!', 'success');
+        setStatus('MetaMask wallet connected!', 'success');
       } catch (e) {
         setStatus('Connection failed: ' + e.message, 'error');
       }
     }
 
+    // === Polkadot Wallet Connection ===
+
+    async function connectPolkadot() {
+      try {
+        if (!window.injectedWeb3) {
+          setStatus('No Polkadot wallet detected. Please install Talisman, SubWallet, or Polkadot.js extension.', 'error');
+          return;
+        }
+
+        // Try wallets in order of preference
+        const walletNames = ['talisman', 'subwallet-js', 'polkadot-js'];
+        let injector = null;
+        let walletName = null;
+
+        for (const name of walletNames) {
+          if (window.injectedWeb3[name]) {
+            try {
+              injector = await window.injectedWeb3[name].enable('Free NFT Ticket Minter');
+              walletName = name;
+              break;
+            } catch (e) {
+              console.log(`Failed to enable ${name}:`, e.message);
+            }
+          }
+        }
+
+        if (!injector) {
+          setStatus('No compatible Polkadot wallet found. Please install Talisman, SubWallet, or Polkadot.js extension.', 'error');
+          return;
+        }
+
+        const accounts = await injector.accounts.get();
+        if (accounts.length === 0) {
+          setStatus('No accounts found in wallet. Please create or import an account.', 'error');
+          return;
+        }
+
+        // Use first account
+        polkadotAccount = accounts[0];
+        polkadotInjector = injector;
+        walletType = 'polkadot';
+
+        document.getElementById('walletSection').style.display = 'none';
+        document.getElementById('mintSection').style.display = 'block';
+
+        const addr = polkadotAccount.address;
+        document.getElementById('walletAddr').textContent =
+          addr.slice(0, 6) + '...' + addr.slice(-4) + ` (${walletName})`;
+
+        setStatus('Polkadot wallet connected!', 'success');
+      } catch (e) {
+        setStatus('Connection failed: ' + e.message, 'error');
+      }
+    }
+
+    // === Minting ===
+
     async function mintTicket() {
+      if (walletType === 'metamask') {
+        await mintViaMetaMask();
+      } else if (walletType === 'polkadot') {
+        await mintViaPolkadot();
+      }
+    }
+
+    async function mintViaMetaMask() {
       const mintBtn = document.getElementById('mintBtn');
       mintBtn.disabled = true;
       mintBtn.textContent = 'Minting...';
@@ -232,6 +366,98 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ request }),
+        });
+
+        const result = await relayRes.json();
+
+        if (!relayRes.ok) {
+          throw new Error(result.error || 'Relay failed');
+        }
+
+        const explorerUrl = `https://blockscout-testnet.polkadot.io/tx/${result.txHash}`;
+        setStatus(
+          `NFT minted successfully!<br>` +
+          `Tx: <a href="${explorerUrl}" target="_blank">${result.txHash.slice(0, 18)}...</a><br>` +
+          `Block: ${result.blockNumber}`,
+          'success'
+        );
+
+        mintBtn.textContent = 'Already Minted';
+      } catch (e) {
+        setStatus('Mint failed: ' + e.message, 'error');
+        mintBtn.disabled = false;
+        mintBtn.textContent = 'Mint Free Ticket';
+      }
+    }
+
+    async function mintViaPolkadot() {
+      const mintBtn = document.getElementById('mintBtn');
+      mintBtn.disabled = true;
+      mintBtn.textContent = 'Minting...';
+
+      try {
+        const cfg = await fetchConfig();
+        const pubkeyHex = ss58ToPublicKeyHex(polkadotAccount.address);
+
+        // 1. Fetch nonce
+        setStatus('Fetching nonce...', 'info');
+        const nonceRes = await fetch(`${SERVER_URL}/api/substrate-nonce/${pubkeyHex}`);
+        const nonceData = await nonceRes.json();
+        if (!nonceRes.ok) throw new Error(nonceData.error || 'Failed to fetch nonce');
+        const nonce = BigInt(nonceData.nonce);
+
+        // 2. Build calldata for mint()
+        const mintIface = new ethers.Interface(['function mint()']);
+        const callData = mintIface.encodeFunctionData('mint');
+
+        // 3. Set deadline (10 minutes from now)
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+
+        // 4. Build message matching SubstrateForwarder._buildMessage()
+        const gasLimit = BigInt(5_000_000_000);
+        const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+        const innerMessage = abiCoder.encode(
+          ['uint256', 'address', 'bytes32', 'address', 'uint256', 'uint256', 'uint48', 'bytes32'],
+          [
+            BigInt(CHAIN_ID),
+            cfg.substrateForwarderAddress,
+            pubkeyHex,
+            cfg.ticketNFTAddress,
+            gasLimit,
+            nonce,
+            Number(deadline),
+            ethers.keccak256(callData)
+          ]
+        );
+
+        // 5. Sign via wallet extension's signRaw
+        // The wallet wraps the payload with <Bytes>...</Bytes> automatically
+        setStatus('Please sign the request in your Polkadot wallet...', 'info');
+        if (!polkadotInjector.signer?.signRaw) {
+          throw new Error('Wallet does not support message signing (signRaw)');
+        }
+
+        const signResult = await polkadotInjector.signer.signRaw({
+          address: polkadotAccount.address,
+          data: innerMessage,
+          type: 'bytes',
+        });
+
+        console.log('[Polkadot Mint] Signature:', signResult.signature);
+
+        // 6. POST to substrate relay
+        setStatus('Relaying transaction (you pay zero gas)...', 'info');
+        const relayRes = await fetch(`${SERVER_URL}/api/substrate-relay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: pubkeyHex,
+            to: cfg.ticketNFTAddress,
+            gas: gasLimit.toString(),
+            deadline: deadline.toString(),
+            data: callData,
+            signature: signResult.signature,
+          }),
         });
 
         const result = await relayRes.json();
