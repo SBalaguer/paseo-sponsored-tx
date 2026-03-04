@@ -3,7 +3,7 @@ builder = "nixpacks"
 nixpacksConfigPath = "nixpacks.toml"
 
 [deploy]
-startCommand = "npx ts-node scripts/relayer-daemon.ts"
+startCommand = "npx tsx scripts/relayer-daemon.ts"
 healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3

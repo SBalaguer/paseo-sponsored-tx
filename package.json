@@ -55,6 +55,7 @@
     "express": "^4.22.1",
     "express-rate-limit": "^7.5.1",
     "polkadot-api": "^1.23.3",
+    "tsx": "^4.21.0",
     "verifiablejs": "^1.2.0",
     "ws": "^8.19.0"
   }
