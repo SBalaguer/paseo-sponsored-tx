@@ -408,7 +408,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
   <script>
     // --- Configuration ---
-    const DAEMON_URL = 'http://localhost:3001';
+    // In production (Railway), frontend is served by the daemon on the same origin.
+    // Locally, override with ?daemon=http://localhost:3001
+    const DAEMON_URL = new URLSearchParams(window.location.search).get('daemon') || window.location.origin;
     const PEOPLE_WS_URI = 'wss://previewnet.substrate.dev/people';
     const TOPIC_HASH = '7152443448ca4caafe2e5a61a03259dfadd1a99813095f883a7084758fc4f65c';
 

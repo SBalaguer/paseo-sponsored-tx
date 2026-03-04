@@ -9,6 +9,8 @@
  */
 
 import * as http from "http";
+import * as fs from "fs";
+import * as path from "path";
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
 import {
@@ -32,7 +34,7 @@ const PROXY_SEED = process.env.PROXY_SEED || "//Alice";
 const FORWARDER_ADDRESS = process.env.FORWARDER_ADDRESS!;
 const SUBSTRATE_FORWARDER_ADDRESS = process.env.SUBSTRATE_FORWARDER_ADDRESS!;
 const TICKET_NFT_ADDRESS = process.env.TICKET_NFT_ADDRESS!;
-const DAEMON_PORT = parseInt(process.env.DAEMON_PORT || "3001", 10);
+const DAEMON_PORT = parseInt(process.env.DAEMON_PORT || process.env.PORT || "3001", 10);
 
 if (
   !DEPLOYER_PRIVATE_KEY ||
@@ -411,12 +413,44 @@ function startHttpServer(
       return;
     }
 
+    // Serve frontend static files
+    const frontendDir = path.resolve(process.cwd(), "frontend");
+    const requestedPath = req.url === "/" ? "/index.html" : req.url || "/index.html";
+    const filePath = path.join(frontendDir, requestedPath);
+
+    // Prevent directory traversal
+    if (!filePath.startsWith(frontendDir)) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.isFile()) {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          ".html": "text/html",
+          ".js": "application/javascript",
+          ".css": "text/css",
+          ".json": "application/json",
+          ".png": "image/png",
+          ".svg": "image/svg+xml",
+        };
+        res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream" });
+        fs.createReadStream(filePath).pipe(res);
+        return;
+      }
+    } catch {
+      // File not found — fall through to 404
+    }
+
     res.writeHead(404);
     res.end("Not found");
   });
 
-  server.listen(DAEMON_PORT, () => {
-    log("HTTP", `Listening on http://localhost:${DAEMON_PORT}`);
+  server.listen(DAEMON_PORT, "0.0.0.0", () => {
+    log("HTTP", `Listening on http://0.0.0.0:${DAEMON_PORT}`);
     log("HTTP", `POST /submit  — proxy statement submission`);
     log("HTTP", `GET  /events  — SSE event stream`);
     log("HTTP", `GET  /health  — daemon health check`);

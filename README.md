@@ -46,7 +46,9 @@ sequenceDiagram
     D-->>U: SSE events (real-time updates)
 ```
 
-The current frontend uses Path B for all wallets. A bundled frontend could use Path A directly via `@polkadot-api/sdk-statement`.
+The frontend attempts Path A first for Polkadot wallets, falling back to Path B on failure. MetaMask always uses Path B.
+
+> **Known limitation:** Path A currently fails with `badProof` for all standard Polkadot wallet extensions (Talisman, Polkadot.js, SubWallet). These wallets wrap `signRaw` data with `<Bytes>...</Bytes>` before signing — a security feature that cannot be bypassed client-side. The People Chain statement store verifies signatures against raw field bytes without attempting unwrapped verification (unlike `sp_runtime::MultiSignature::verify` which tries both). Until the statement store adds `<Bytes>`-aware verification, Path A will always fall back to Path B for browser wallets. A bundled frontend using `@polkadot-api/sdk-statement` with direct keypair access would bypass this limitation.
 
 **Contracts (3 total):**
 - `ERC2771Forwarder` — OpenZeppelin v5. Verifies EIP-712 signatures, manages nonces, forwards calls.
@@ -92,7 +94,7 @@ npm run relayer
 
 The daemon:
 - Connects to People Chain and subscribes to the statement store
-- Exposes HTTP endpoints on port 3001 (configurable via `DAEMON_PORT`)
+- Serves the frontend and exposes HTTP endpoints on port 3001 (configurable via `DAEMON_PORT`)
 - Broadcasts SSE events for real-time lifecycle tracking
 
 ### 6. Open the developer dashboard
@@ -164,6 +166,45 @@ All events carry a `correlationId` (`type:from:deadline`) for tracking a specifi
 | 6 | maxSupply cap | TicketNFT (on-chain) |
 | 7 | mintDeadline | TicketNFT (on-chain) |
 | 8 | Soulbound (non-transferable) | TicketNFT (on-chain) |
+
+## Deployment (Railway)
+
+The daemon serves both the API and the frontend on the same port, so a single Railway service is all you need.
+
+1. **Install Railway CLI and login:**
+   ```bash
+   npm i -g @railway/cli
+   railway login
+   ```
+
+2. **Initialize project** (from repo root):
+   ```bash
+   railway init
+   ```
+
+3. **Set environment variables:**
+   ```bash
+   railway variables set DEPLOYER_PRIVATE_KEY=<your-key>
+   railway variables set FORWARDER_ADDRESS=<address>
+   railway variables set SUBSTRATE_FORWARDER_ADDRESS=<address>
+   railway variables set TICKET_NFT_ADDRESS=<address>
+   railway variables set PEOPLE_WS_URI=wss://previewnet.substrate.dev/people
+   railway variables set ASSET_HUB_ETH_RPC=https://previewnet.substrate.dev/eth-rpc
+   railway variables set PROXY_SEED=<seed>
+   ```
+   Do not set `PORT` — Railway assigns it automatically.
+
+4. **Deploy:**
+   ```bash
+   railway up
+   ```
+
+5. **Generate a public domain:**
+   ```bash
+   railway domain
+   ```
+
+The frontend's `DAEMON_URL` defaults to `window.location.origin`, so it works automatically on Railway. For local development, add `?daemon=http://localhost:3001` as a query parameter to override.
 
 ## Network
 
