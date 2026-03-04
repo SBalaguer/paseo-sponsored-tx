@@ -645,8 +645,13 @@
           s.classList.add('failed');
         });
         const mintBtn = document.getElementById('mintBtn');
-        mintBtn.textContent = 'Failed — Try Again';
-        mintBtn.disabled = false;
+        if (data.reason && data.reason.includes('already minted')) {
+          mintBtn.textContent = 'Already Minted';
+          mintBtn.disabled = true;
+        } else {
+          mintBtn.textContent = 'Failed — Try Again';
+          mintBtn.disabled = false;
+        }
         return;
       }
 
@@ -816,6 +821,7 @@
       walletType = 'metamask';
       hideAccountPicker();
       showMintUI(userAddress.slice(0, 6) + '...' + userAddress.slice(-4));
+      checkHasMinted();
     }
 
     // --- Polkadot ---
@@ -859,6 +865,7 @@
       hideAccountPicker();
       const addr = acct.address;
       showMintUI(addr.slice(0, 6) + '...' + addr.slice(-4) + ` (${walletName})`);
+      checkHasMinted();
     }
 
     function disconnectWallet() {
@@ -901,6 +908,32 @@
       document.getElementById('walletSection').style.display = 'none';
       document.getElementById('mintSection').style.display = 'block';
       document.getElementById('walletAddr').textContent = label;
+    }
+
+    async function checkHasMinted() {
+      try {
+        const cfg = await fetchConfig();
+        const rpcProvider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+        const nftContract = new ethers.Contract(cfg.ticketNFTAddress, ['function hasMinted(address) view returns (bool)'], rpcProvider);
+
+        let evmAddr;
+        if (walletType === 'polkadot') {
+          const pubkeyHex = ss58ToPublicKeyHex(polkadotAccount.address);
+          const fwdContract = new ethers.Contract(cfg.substrateForwarderAddress, ['function toH160(bytes32) view returns (address)'], rpcProvider);
+          evmAddr = await fwdContract.toH160(pubkeyHex);
+        } else {
+          evmAddr = userAddress;
+        }
+
+        const minted = await nftContract.hasMinted(evmAddr);
+        if (minted) {
+          const mintBtn = document.getElementById('mintBtn');
+          mintBtn.textContent = 'Already Minted';
+          mintBtn.disabled = true;
+        }
+      } catch (e) {
+        console.log('hasMinted check failed:', e.message);
+      }
     }
 
     // --- Minting ---

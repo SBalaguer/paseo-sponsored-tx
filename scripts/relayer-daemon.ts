@@ -72,6 +72,11 @@ const SUBSTRATE_FORWARDER_ABI = [
   "function substrateNonces(bytes32 pubkey) view returns (uint256)",
   "function verify((bytes32 from, address to, uint256 gas, uint48 deadline, bytes data, uint8[64] signature) request) view returns (bool)",
   "function execute((bytes32 from, address to, uint256 gas, uint48 deadline, bytes data, uint8[64] signature) request)",
+  "function toH160(bytes32 accountId) view returns (address)",
+];
+
+const TICKET_NFT_ABI = [
+  "function hasMinted(address) view returns (bool)",
 ];
 
 const forwarder = new ethers.Contract(
@@ -83,6 +88,11 @@ const substrateForwarder = new ethers.Contract(
   SUBSTRATE_FORWARDER_ADDRESS,
   SUBSTRATE_FORWARDER_ABI,
   relayerWallet,
+);
+const ticketNFT = new ethers.Contract(
+  TICKET_NFT_ADDRESS,
+  TICKET_NFT_ABI,
+  provider,
 );
 
 // --- SSE infrastructure ---
@@ -135,6 +145,24 @@ async function executeMetaTx(metaTx: MetaTxRequest): Promise<void> {
     return;
   }
 
+  // Pre-check: has this user already minted? (saves gas on replayed statements)
+  try {
+    let minterAddress: string;
+    if (metaTx.type === "sr25519") {
+      minterAddress = await substrateForwarder.toH160(metaTx.from);
+    } else {
+      minterAddress = metaTx.from;
+    }
+    const alreadyMinted = await ticketNFT.hasMinted(minterAddress);
+    if (alreadyMinted) {
+      log("EXEC", `[${requestId}] REJECTED: already minted (${minterAddress})`);
+      broadcastSSE("tx:failed", { correlationId: cid, reason: "already minted", from: metaTx.from });
+      return;
+    }
+  } catch (e: any) {
+    log("EXEC", `[${requestId}] hasMinted check failed, proceeding: ${e.message}`);
+  }
+
   try {
     if (metaTx.type === "ecdsa") {
       await executeEcdsaMetaTx(metaTx, requestId, cid);
@@ -173,37 +201,30 @@ async function executeEcdsaMetaTx(
   }
 
   log("EXEC", `[${requestId}] Executing via forwarder...`);
-  let tx: any;
+  // Populate, sign, and compute hash before broadcasting so we always have the tx hash
+  const contractTx = await forwarder.execute.populateTransaction(forwardRequest, { gasLimit: 1_000_000 });
+  const populatedTx = await relayerWallet.populateTransaction(contractTx);
+  const signedTx = await relayerWallet.signTransaction(populatedTx);
+  const txHash = ethers.keccak256(signedTx);
   try {
-    tx = await forwarder.execute(forwardRequest, { gasLimit: 1_000_000 });
+    await provider.broadcastTransaction(signedTx);
   } catch (sendErr: any) {
-    if (sendErr.message?.includes("Transaction Already Imported")) {
-      log("EXEC", `[${requestId}] Tx accepted (Already Imported) — polling for confirmation...`);
-      broadcastSSE("tx:submitted", { correlationId: cid, txHash: "pending", from: metaTx.from });
-      const startNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 6000));
-        const currentNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
-        if (currentNonce > startNonce) {
-          log("EXEC", `[${requestId}] Confirmed (nonce ${startNonce} → ${currentNonce})`);
-          broadcastSSE("tx:confirmed", { correlationId: cid, txHash: "confirmed-via-nonce", from: metaTx.from });
-          return;
-        }
-      }
-      log("EXEC", `[${requestId}] Timed out waiting for confirmation`);
-      broadcastSSE("tx:failed", { correlationId: cid, reason: "timeout waiting for confirmation", from: metaTx.from });
-      return;
-    }
-    throw sendErr;
+    if (!sendErr.message?.includes("Transaction Already Imported")) throw sendErr;
+    log("EXEC", `[${requestId}] Tx accepted (Already Imported) — hash: ${txHash}`);
   }
-  log("EXEC", `[${requestId}] Tx submitted: ${tx.hash}`);
-  broadcastSSE("tx:submitted", { correlationId: cid, txHash: tx.hash, from: metaTx.from });
-  const receipt = await tx.wait();
+  log("EXEC", `[${requestId}] Tx submitted: ${txHash}`);
+  broadcastSSE("tx:submitted", { correlationId: cid, txHash, from: metaTx.from });
+  const receipt = await provider.waitForTransaction(txHash, 1, 180_000);
+  if (receipt!.status === 0) {
+    log("EXEC", `[${requestId}] REVERTED in block ${receipt!.blockNumber}`);
+    broadcastSSE("tx:failed", { correlationId: cid, txHash, reason: "transaction reverted on-chain", from: metaTx.from });
+    return;
+  }
   log(
     "EXEC",
-    `[${requestId}] Confirmed block ${receipt.blockNumber}, gas ${receipt.gasUsed}`,
+    `[${requestId}] Confirmed block ${receipt!.blockNumber}, gas ${receipt!.gasUsed}`,
   );
-  broadcastSSE("tx:confirmed", { correlationId: cid, txHash: tx.hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed.toString(), from: metaTx.from });
+  broadcastSSE("tx:confirmed", { correlationId: cid, txHash, blockNumber: receipt!.blockNumber, gasUsed: receipt!.gasUsed.toString(), from: metaTx.from });
 }
 
 async function executeSr25519MetaTx(
@@ -239,39 +260,32 @@ async function executeSr25519MetaTx(
   }
 
   log("EXEC", `[${requestId}] Executing via substrateForwarder...`);
-  let tx: any;
+  // Populate, sign, and compute hash before broadcasting so we always have the tx hash
+  const contractTx = await substrateForwarder.execute.populateTransaction(forwardRequest, {
+    gasLimit: 5_000_000_000,
+  });
+  const populatedTx = await relayerWallet.populateTransaction(contractTx);
+  const signedTx = await relayerWallet.signTransaction(populatedTx);
+  const txHash = ethers.keccak256(signedTx);
   try {
-    tx = await substrateForwarder.execute(forwardRequest, {
-      gasLimit: 5_000_000_000,
-    });
+    await provider.broadcastTransaction(signedTx);
   } catch (sendErr: any) {
-    if (sendErr.message?.includes("Transaction Already Imported")) {
-      log("EXEC", `[${requestId}] Tx accepted (Already Imported) — polling for confirmation...`);
-      broadcastSSE("tx:submitted", { correlationId: cid, txHash: "pending", from: metaTx.from });
-      const startNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 6000));
-        const currentNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
-        if (currentNonce > startNonce) {
-          log("EXEC", `[${requestId}] Confirmed (nonce ${startNonce} → ${currentNonce})`);
-          broadcastSSE("tx:confirmed", { correlationId: cid, txHash: "confirmed-via-nonce", from: metaTx.from });
-          return;
-        }
-      }
-      log("EXEC", `[${requestId}] Timed out waiting for confirmation`);
-      broadcastSSE("tx:failed", { correlationId: cid, reason: "timeout waiting for confirmation", from: metaTx.from });
-      return;
-    }
-    throw sendErr;
+    if (!sendErr.message?.includes("Transaction Already Imported")) throw sendErr;
+    log("EXEC", `[${requestId}] Tx accepted (Already Imported) — hash: ${txHash}`);
   }
-  log("EXEC", `[${requestId}] Tx submitted: ${tx.hash}`);
-  broadcastSSE("tx:submitted", { correlationId: cid, txHash: tx.hash, from: metaTx.from });
-  const receipt = await tx.wait();
+  log("EXEC", `[${requestId}] Tx submitted: ${txHash}`);
+  broadcastSSE("tx:submitted", { correlationId: cid, txHash, from: metaTx.from });
+  const receipt = await provider.waitForTransaction(txHash, 1, 180_000);
+  if (receipt!.status === 0) {
+    log("EXEC", `[${requestId}] REVERTED in block ${receipt!.blockNumber}`);
+    broadcastSSE("tx:failed", { correlationId: cid, txHash, reason: "transaction reverted on-chain", from: metaTx.from });
+    return;
+  }
   log(
     "EXEC",
-    `[${requestId}] Confirmed block ${receipt.blockNumber}, gas ${receipt.gasUsed}`,
+    `[${requestId}] Confirmed block ${receipt!.blockNumber}, gas ${receipt!.gasUsed}`,
   );
-  broadcastSSE("tx:confirmed", { correlationId: cid, txHash: tx.hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed.toString(), from: metaTx.from });
+  broadcastSSE("tx:confirmed", { correlationId: cid, txHash, blockNumber: receipt!.blockNumber, gasUsed: receipt!.gasUsed.toString(), from: metaTx.from });
 }
 
 // --- Process queue sequentially ---
