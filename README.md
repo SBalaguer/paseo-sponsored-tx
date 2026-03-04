@@ -1,29 +1,38 @@
-# Sponsored NFT Ticket Minting on Passet Hub
+# Sponsored Meta-Transactions on Preview Net
 
-Mint free NFT event tickets on Polkadot's Passet Hub testnet (chain ID `420420422`) without holding native PAS tokens. A backend relay server pays gas on behalf of users using **EIP-2771 meta-transactions**.
+Mint free NFT event tickets on Polkadot's Asset Hub (Preview Net) without holding native tokens. A relayer daemon pays gas on behalf of users using **EIP-2771 meta-transactions**, transported via the **People Chain Statement Store** (P2P gossip).
+
+Supports both **MetaMask (EVM/ECDSA)** and **Polkadot wallets (sr25519)**.
 
 ## Architecture
 
 ```
-User (MetaMask)                Server (Express)              Blockchain (Passet Hub)
-    |                               |                               |
-    |-- 1. Sign EIP-712 request --->|                               |
-    |   (MetaMask popup)            |                               |
-    |                               |-- 2. Anti-spam checks         |
-    |                               |   (rate limit, dedup)         |
-    |                               |                               |
-    |                               |-- 3. forwarder.execute(req) ->|
-    |                               |   (server pays gas)           |
-    |                               |                               |-- 4. Verify EIP-712 sig
-    |                               |                               |-- 5. Forward to TicketNFT
-    |                               |                               |-- 6. _msgSender() = user
-    |                               |<--- tx receipt ---------------|
-    |<--- tx hash + success --------|                               |
+User (MetaMask / Polkadot wallet)        Relayer Daemon              Blockchain
+    |                                         |                          |
+    |-- 1. Sign meta-tx request              |                          |
+    |   (EIP-712 or sr25519)                 |                          |
+    |                                         |                          |
+    |-- 2. POST /submit ------------------>  |                          |
+    |                                         |-- 3. Wrap in statement   |
+    |                                         |   (sr25519 proxy sig)    |
+    |                                         |                          |
+    |                                         |-- 4. Submit to People -->| People Chain
+    |                                         |      Chain stmt store    | (P2P gossip)
+    |                                         |                          |
+    |                                         |<- 5. Subscription picks  |
+    |                                         |   up statement           |
+    |                                         |                          |
+    |  <-- SSE events --                      |-- 6. Verify signature -->| Asset Hub
+    |  (real-time updates)                    |-- 7. Execute on-chain    | (PolkaVM)
+    |                                         |<--- tx receipt ---------|
 ```
 
-**Contracts (2 total):**
-- `ERC2771Forwarder` — OpenZeppelin v5, deployed as-is. Verifies EIP-712 signatures, manages nonces, forwards calls.
+**Contracts (3 total):**
+- `ERC2771Forwarder` — OpenZeppelin v5. Verifies EIP-712 signatures, manages nonces, forwards calls.
+- `SubstrateForwarder` — Custom forwarder for sr25519 signatures (Polkadot native wallets).
 - `TicketNFT` — Custom ERC-721 with `ERC2771Context`. Soulbound, 1 mint per address, supply cap, deadline.
+
+**Transport:** People Chain Statement Store — a decentralized P2P gossip layer. No single relay server dependency.
 
 ## Quick Start
 
@@ -37,8 +46,7 @@ npm install
 
 ```bash
 cp .env.example .env
-# Edit .env with your deployer private key
-# Fund from faucet: https://faucet.polkadot.io/?parachain=1111
+# Edit .env with your deployer private key and contract addresses
 ```
 
 ### 3. Compile & test
@@ -48,68 +56,96 @@ npm run compile
 npm test
 ```
 
-### 4. Deploy to Passet Hub testnet
+### 4. Deploy to Preview Net
 
 ```bash
-npm run deploy
-# Copy the output addresses into .env (FORWARDER_ADDRESS, TICKET_NFT_ADDRESS)
+npm run deploy:preview
+# Copy the output addresses into .env (FORWARDER_ADDRESS, SUBSTRATE_FORWARDER_ADDRESS, TICKET_NFT_ADDRESS)
 ```
 
-### 5. Integration test on testnet
+### 5. Start the relayer daemon
 
 ```bash
-npm run test:mint
+npm run relayer
 ```
 
-### 6. Start relay server
+The daemon:
+- Connects to People Chain and subscribes to the statement store
+- Exposes HTTP endpoints on port 3001 (configurable via `DAEMON_PORT`)
+- Broadcasts SSE events for real-time lifecycle tracking
+
+### 6. Open the developer dashboard
 
 ```bash
-npm run server
+npm run frontend
+# Opens http://localhost:8080
 ```
 
-### 7. Open frontend
+Or open `frontend/index.html` directly — it connects to the daemon at `http://localhost:3001`.
 
-Open `frontend/index.html` in a browser (or serve it).
+The dashboard shows:
+- System info (relayer address, balance, contract addresses)
+- Wallet connect (MetaMask or Polkadot wallet, with account picker)
+- 5-step transaction pipeline (Signed → Submitted → Picked Up → Executed → Confirmed)
+- Live event log with all daemon SSE traffic
 
 ## Project Structure
 
 | File | Purpose |
 |------|---------|
 | `contracts/TicketNFT.sol` | NFT contract with ERC2771Context |
+| `contracts/SubstrateForwarder.sol` | Forwarder for sr25519 meta-transactions |
 | `contracts/ForwarderImport.sol` | Forces Hardhat to compile the OZ forwarder |
-| `scripts/deploy.ts` | Deploy Forwarder + NFT to Passet Hub |
-| `scripts/test-mint.ts` | End-to-end integration test on testnet |
-| `server/index.ts` | Express relay server with anti-spam |
-| `frontend/index.html` | Single-page mint UI |
-| `test/TicketNFT.test.ts` | Unit tests (13 tests) |
+| `lib/statement-store.ts` | People Chain client, proxy signer, statement encode/decode |
+| `scripts/relayer-daemon.ts` | Relayer daemon with SSE, statement store subscription |
+| `scripts/deploy-preview.ts` | Deploy contracts to Preview Net |
+| `scripts/register-proxy.ts` | One-time proxy account registration on People Chain |
+| `scripts/test-mint.ts` | End-to-end integration test |
+| `frontend/index.html` | Developer dashboard with real-time pipeline tracking |
+| `server/index.ts` | Legacy Express relay server (pre-statement-store) |
+| `test/TicketNFT.test.ts` | Unit tests |
+
+## Daemon API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/events` | SSE stream — real-time lifecycle events |
+| `GET` | `/api/daemon-info` | Relayer address, balance, proxy, contracts, processed count |
+| `GET` | `/api/config` | Contract addresses + chain ID for frontend |
+| `GET` | `/api/nonce/:address` | EVM forwarder nonce for an address |
+| `GET` | `/api/substrate-nonce/:pubkey` | Substrate forwarder nonce for a public key |
+| `POST` | `/submit` | Submit a meta-tx (daemon wraps it in a statement) |
+| `GET` | `/health` | Health check |
+
+### SSE Events
+
+| Event | When |
+|-------|------|
+| `statement:submitted` | Meta-tx wrapped and submitted to People Chain |
+| `statement:received` | Subscription picks up a new statement |
+| `tx:verifying` | Signature verification in progress |
+| `tx:submitted` | Transaction sent to Asset Hub |
+| `tx:confirmed` | Transaction confirmed on-chain |
+| `tx:failed` | Error at any stage (whitelist, deadline, verify, revert) |
+| `daemon:health` | Heartbeat every 30s (balance, processed count, queue) |
+
+All events carry a `correlationId` (`type:from:deadline`) for tracking a specific transaction through the pipeline.
 
 ## Anti-Spam Layers
 
 | Layer | Mechanism | Where |
 |-------|-----------|-------|
-| 1 | IP rate limiting (3/day) | Server |
-| 2 | Wallet dedup (1 per wallet) | Server |
-| 3 | Target contract whitelist | Server |
-| 4 | EIP-712 signature verification | Forwarder (on-chain) |
+| 1 | Target contract whitelist | Daemon |
+| 2 | Deadline expiry check | Daemon |
+| 3 | Statement dedup (processed set) | Daemon |
+| 4 | EIP-712 / sr25519 signature verification | Forwarder (on-chain) |
 | 5 | hasMinted (1 per address) | TicketNFT (on-chain) |
 | 6 | maxSupply cap | TicketNFT (on-chain) |
 | 7 | mintDeadline | TicketNFT (on-chain) |
 | 8 | Soulbound (non-transferable) | TicketNFT (on-chain) |
 
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check + relayer balance |
-| `GET` | `/stats` | Total relayed, minted, balance |
-| `GET` | `/api/config` | Contract addresses for frontend |
-| `GET` | `/api/nonce/:address` | User's current forwarder nonce |
-| `POST` | `/api/relay` | Submit signed ForwardRequest for relay |
-
 ## Network
 
-- **Chain:** Passet Hub Testnet
-- **Chain ID:** `420420422`
-- **RPC:** `https://testnet-passet-hub-eth-rpc.polkadot.io`
-- **Explorer:** `https://blockscout-passet-hub.parity-testnet.parity.io`
-- **Faucet:** `https://faucet.polkadot.io/?parachain=1111`
+- **Chain:** Preview Net Asset Hub
+- **RPC:** `https://previewnet.substrate.dev/eth-rpc`
+- **People Chain WS:** `wss://previewnet.substrate.dev/people`
