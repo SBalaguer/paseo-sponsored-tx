@@ -6,26 +6,47 @@ Supports both **MetaMask (EVM/ECDSA)** and **Polkadot wallets (sr25519)**.
 
 ## Architecture
 
+There are two submission paths depending on whether the user has a People Chain attestation (statement store allowance):
+
+**Path A — Direct submission (attested users):**
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant PC as People Chain<br/>(Statement Store)
+    participant D as Relayer Daemon
+    participant AH as Asset Hub<br/>(PolkaVM)
+
+    U->>U: 1. Sign meta-tx (EIP-712 / sr25519)
+    U->>PC: 2. Submit statement directly
+    PC-->>D: 3. Subscription picks up statement
+    D->>AH: 4. Verify signature
+    D->>AH: 5. Execute on-chain
+    AH-->>D: tx receipt
+    D-->>U: SSE events (real-time updates)
 ```
-User (MetaMask / Polkadot wallet)        Relayer Daemon              Blockchain
-    |                                         |                          |
-    |-- 1. Sign meta-tx request              |                          |
-    |   (EIP-712 or sr25519)                 |                          |
-    |                                         |                          |
-    |-- 2. POST /submit ------------------>  |                          |
-    |                                         |-- 3. Wrap in statement   |
-    |                                         |   (sr25519 proxy sig)    |
-    |                                         |                          |
-    |                                         |-- 4. Submit to People -->| People Chain
-    |                                         |      Chain stmt store    | (P2P gossip)
-    |                                         |                          |
-    |                                         |<- 5. Subscription picks  |
-    |                                         |   up statement           |
-    |                                         |                          |
-    |  <-- SSE events --                      |-- 6. Verify signature -->| Asset Hub
-    |  (real-time updates)                    |-- 7. Execute on-chain    | (PolkaVM)
-    |                                         |<--- tx receipt ---------|
+
+**Path B — Proxy fallback (unattested users, e.g. MetaMask):**
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant D as Relayer Daemon
+    participant PC as People Chain<br/>(Statement Store)
+    participant AH as Asset Hub<br/>(PolkaVM)
+
+    U->>U: 1. Sign meta-tx (EIP-712 / sr25519)
+    U->>D: 2. POST /submit
+    D->>D: 3. Wrap in statement (proxy sr25519 sig)
+    D->>PC: 4. Submit to statement store
+    PC-->>D: 5. Subscription picks up statement
+    D->>AH: 6. Verify signature
+    D->>AH: 7. Execute on-chain
+    AH-->>D: tx receipt
+    D-->>U: SSE events (real-time updates)
 ```
+
+The current frontend uses Path B for all wallets. A bundled frontend could use Path A directly via `@polkadot-api/sdk-statement`.
 
 **Contracts (3 total):**
 - `ERC2771Forwarder` — OpenZeppelin v5. Verifies EIP-712 signatures, manages nonces, forwards calls.
