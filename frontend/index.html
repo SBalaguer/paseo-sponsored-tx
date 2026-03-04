@@ -286,14 +286,11 @@
 
   <!-- System Info -->
   <div class="system-info" id="systemInfo">
-    <div class="info-item"><span class="info-label">Relayer:</span><span class="info-value" id="infoRelayer">--</span></div>
-    <div class="info-item"><span class="info-label">Balance:</span><span class="info-value" id="infoBalance">--</span></div>
-    <div class="info-item"><span class="info-label">Proxy (SS58):</span><span class="info-value" id="infoProxy">--</span></div>
     <div class="info-item"><span class="info-label">Forwarder:</span><span class="info-value" id="infoForwarder">--</span></div>
     <div class="info-item"><span class="info-label">SubstrateForwarder:</span><span class="info-value" id="infoSubForwarder">--</span></div>
     <div class="info-item"><span class="info-label">TicketNFT:</span><span class="info-value" id="infoNFT">--</span></div>
     <div class="info-item"><span class="info-label">People Chain:</span><span class="info-value" id="infoPeople">--</span></div>
-    <div class="info-item"><span class="info-label">Processed:</span><span class="info-value" id="infoProcessed">--</span></div>
+    <div class="info-item"><span class="info-label">RPC:</span><span class="info-value" id="infoRPC">--</span></div>
   </div>
 
   <!-- Main -->
@@ -408,11 +405,17 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
   <script>
     // --- Configuration ---
-    // In production (Railway), frontend is served by the daemon on the same origin.
-    // Locally, override with ?daemon=http://localhost:3001
+    // DAEMON_URL is only needed for /submit (Path B proxy) and /events (SSE stream).
+    // The frontend is self-contained for everything else (config, nonces, system info).
     const DAEMON_URL = new URLSearchParams(window.location.search).get('daemon') || window.location.origin;
     const PEOPLE_WS_URI = 'wss://previewnet.substrate.dev/people';
     const TOPIC_HASH = '7152443448ca4caafe2e5a61a03259dfadd1a99813095f883a7084758fc4f65c';
+
+    // Contract addresses and RPC — static config (no daemon dependency)
+    const RPC_URL = 'https://previewnet.substrate.dev/eth-rpc';
+    const FORWARDER_ADDRESS = '0xBF8550321464F678559DF525a4F7fc93b54d0cdf';
+    const SUBSTRATE_FORWARDER_ADDRESS = '0xfCdF79BBC0A82D3995E1dB2809Fc268342111700';
+    const TICKET_NFT_ADDRESS = '0x8f444e1161a683eC8CAdB479076898a7c392676E';
 
     // --- SCALE Encoding (ported from lib/statement-store.ts) ---
 
@@ -421,7 +424,7 @@
     const FIELD_TOPIC1 = 4;
     const FIELD_DATA = 8;
     const PROOF_SR25519 = 0;
-    const STMT_PRIORITY = BigInt('0xFFFFFFFF00000001');
+    const STMT_PRIORITY = BigInt('0xFFFFFFFF00000001'); // u64: high 32 = expiry (never), low 32 = priority
 
     function stmtEncodeCompact(value) {
       if (value < 64) return new Uint8Array([(value << 2)]);
@@ -683,9 +686,6 @@
         mintBtn.textContent = 'Confirmed!';
       }
 
-      if (event === 'daemon:health' && data.processedCount !== undefined) {
-        document.getElementById('infoProcessed').textContent = data.processedCount;
-      }
     }
 
     function resetPipeline() {
@@ -721,29 +721,28 @@
 
     // --- System Info ---
 
-    async function fetchDaemonInfo() {
-      try {
-        const res = await fetch(`${DAEMON_URL}/api/daemon-info`);
-        const info = await res.json();
-        document.getElementById('infoRelayer').textContent = info.relayer;
-        document.getElementById('infoBalance').textContent = info.balance + ' DOT';
-        document.getElementById('infoProxy').textContent = info.proxySS58;
-        document.getElementById('infoForwarder').textContent = info.forwarderAddress;
-        document.getElementById('infoSubForwarder').textContent = info.substrateForwarderAddress;
-        document.getElementById('infoNFT').textContent = info.ticketNFTAddress;
-        document.getElementById('infoPeople').textContent = info.peopleChainWs;
-        document.getElementById('infoProcessed').textContent = info.processedCount;
-      } catch {
-        // Daemon not reachable yet
-      }
+    function populateSystemInfo() {
+      document.getElementById('infoForwarder').textContent = FORWARDER_ADDRESS;
+      document.getElementById('infoSubForwarder').textContent = SUBSTRATE_FORWARDER_ADDRESS;
+      document.getElementById('infoNFT').textContent = TICKET_NFT_ADDRESS;
+      document.getElementById('infoPeople').textContent = PEOPLE_WS_URI;
+      document.getElementById('infoRPC').textContent = RPC_URL;
     }
 
     // --- Config ---
 
     async function fetchConfig() {
       if (config) return config;
-      const res = await fetch(`${DAEMON_URL}/api/config`);
-      config = await res.json();
+      // Fetch chainId from RPC (block.chainid must match exactly for signature verification)
+      const rpcProvider = new ethers.JsonRpcProvider(RPC_URL);
+      const network = await rpcProvider.getNetwork();
+      config = {
+        forwarderAddress: FORWARDER_ADDRESS,
+        substrateForwarderAddress: SUBSTRATE_FORWARDER_ADDRESS,
+        ticketNFTAddress: TICKET_NFT_ADDRESS,
+        chainId: Number(network.chainId),
+        rpcUrl: RPC_URL,
+      };
       return config;
     }
 
@@ -950,8 +949,9 @@
 
       try {
         const cfg = await fetchConfig();
-        const nonceRes = await fetch(`${DAEMON_URL}/api/nonce/${userAddress}`);
-        const { nonce } = await nonceRes.json();
+        const rpcProvider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+        const fwdContract = new ethers.Contract(cfg.forwarderAddress, ['function nonces(address) view returns (uint256)'], rpcProvider);
+        const nonce = (await fwdContract.nonces(userAddress)).toString();
 
         const domain = { name: 'TicketForwarder', version: '1', chainId: cfg.chainId, verifyingContract: cfg.forwarderAddress };
         const types = {
@@ -1024,10 +1024,9 @@
         const cfg = await fetchConfig();
         const pubkeyHex = ss58ToPublicKeyHex(polkadotAccount.address);
 
-        const nonceRes = await fetch(`${DAEMON_URL}/api/substrate-nonce/${pubkeyHex}`);
-        const nonceData = await nonceRes.json();
-        if (!nonceRes.ok) throw new Error(nonceData.error || 'Failed to fetch nonce');
-        const nonce = BigInt(nonceData.nonce);
+        const rpcProvider = new ethers.JsonRpcProvider(cfg.rpcUrl);
+        const subFwdContract = new ethers.Contract(cfg.substrateForwarderAddress, ['function substrateNonces(bytes32) view returns (uint256)'], rpcProvider);
+        const nonce = await subFwdContract.substrateNonces(pubkeyHex);
 
         const mintIface = new ethers.Interface(['function mint()']);
         const callData = mintIface.encodeFunctionData('mint');
@@ -1038,6 +1037,13 @@
         const innerMessage = abiCoder.encode(
           ['uint256', 'address', 'bytes32', 'address', 'uint256', 'uint256', 'uint48', 'bytes32'],
           [BigInt(cfg.chainId), cfg.substrateForwarderAddress, pubkeyHex, cfg.ticketNFTAddress, gasLimit, nonce, Number(deadline), ethers.keccak256(callData)]
+        );
+
+        // Build the exact message the contract verifies against:
+        // abi.encodePacked("<Bytes>", abi.encode(...fields...), "</Bytes>")
+        const wrappedMessage = ethers.solidityPacked(
+          ['string', 'bytes', 'string'],
+          ['<Bytes>', innerMessage, '</Bytes>']
         );
 
         if (!polkadotInjector.signer?.signRaw) throw new Error('Wallet does not support signRaw');
@@ -1051,8 +1057,11 @@
         document.getElementById('step-sign-mint').classList.add('active');
         document.getElementById('step-sign-mint-detail').textContent = 'Wallet will prompt — this authorizes the mint call';
 
+        // Sign the pre-wrapped message with type:'payload' (no additional wrapping).
+        // This matches SubstrateForwarder._buildMessage() exactly:
+        //   abi.encodePacked("<Bytes>", abi.encode(...), "</Bytes>")
         const signResult = await polkadotInjector.signer.signRaw({
-          address: polkadotAccount.address, data: innerMessage, type: 'bytes',
+          address: polkadotAccount.address, data: wrappedMessage, type: 'payload',
         });
 
         document.getElementById('step-sign-mint').classList.remove('active');
@@ -1065,6 +1074,10 @@
         };
 
         // --- Signature 2/2: Statement proof ---
+        // Note: Path A (direct statement submission) may fail with badProof for browser
+        // wallets because signRaw always wraps data with <Bytes>...</Bytes>, but the
+        // People Chain statement store verifies against raw bytes. When this happens,
+        // the frontend automatically falls back to Path B.
         mintBtn.textContent = 'Sign statement (2/2)...';
         document.getElementById('step-sign-stmt').classList.add('active');
         document.getElementById('step-sign-stmt-detail').textContent = 'Wallet will prompt — this proves you authored the statement';
@@ -1074,9 +1087,6 @@
         const compactPrefixLen = stmtEncodeCompact(3).length;
         const fieldsBytes = unsignedEncoded.slice(compactPrefixLen);
 
-        // Use type:'payload' to avoid <Bytes> wrapping — the statement store
-        // verifies against raw fieldsBytes, not <Bytes>-wrapped bytes.
-        // (type:'bytes' would wrap, causing badProof)
         const stmtSignResult = await polkadotInjector.signer.signRaw({
           address: polkadotAccount.address,
           data: '0x' + stmtBytesToHex(fieldsBytes),
@@ -1160,7 +1170,7 @@
 
     // --- Init ---
     connectSSE();
-    fetchDaemonInfo();
+    populateSystemInfo();
   </script>
 </body>
 </html>

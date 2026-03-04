@@ -48,7 +48,7 @@ sequenceDiagram
 
 The frontend attempts Path A first for Polkadot wallets, falling back to Path B on failure. MetaMask always uses Path B.
 
-> **Known limitation:** Path A currently fails with `badProof` for all standard Polkadot wallet extensions (Talisman, Polkadot.js, SubWallet). These wallets wrap `signRaw` data with `<Bytes>...</Bytes>` before signing — a security feature that cannot be bypassed client-side. The People Chain statement store verifies signatures against raw field bytes without attempting unwrapped verification (unlike `sp_runtime::MultiSignature::verify` which tries both). Until the statement store adds `<Bytes>`-aware verification, Path A will always fall back to Path B for browser wallets. A bundled frontend using `@polkadot-api/sdk-statement` with direct keypair access would bypass this limitation.
+> **Note on Path A:** Path A (direct statement submission) may fail with `badProof` for browser wallets due to the `<Bytes>` wrapping that wallet extensions apply to `signRaw`. When this happens, the frontend automatically falls back to Path B. The mint authorization signature avoids this issue by pre-wrapping the message with `<Bytes>...</Bytes>` (matching the `SubstrateForwarder` contract's `_buildMessage`) and signing with `type: 'payload'`.
 
 **Contracts (3 total):**
 - `ERC2771Forwarder` — OpenZeppelin v5. Verifies EIP-712 signatures, manages nonces, forwards calls.
@@ -94,7 +94,7 @@ npm run relayer
 
 The daemon:
 - Connects to People Chain and subscribes to the statement store
-- Serves the frontend and exposes HTTP endpoints on port 3001 (configurable via `DAEMON_PORT`)
+- Exposes `/submit` (Path B proxy), `/events` (SSE), and `/health` on port 3001 (configurable via `DAEMON_PORT`)
 - Broadcasts SSE events for real-time lifecycle tracking
 
 ### 6. Open the developer dashboard
@@ -104,13 +104,13 @@ npm run frontend
 # Opens http://localhost:8080
 ```
 
-Or open `frontend/index.html` directly — it connects to the daemon at `http://localhost:3001`.
+Or open `frontend/index.html` directly — it's self-contained (config, nonces, contract calls all happen client-side). Add `?daemon=http://localhost:3001` to connect to the daemon for `/submit` (Path B proxy) and `/events` (SSE stream).
 
 The dashboard shows:
-- System info (relayer address, balance, contract addresses)
+- System info (contract addresses, RPC, People Chain)
 - Wallet connect (MetaMask or Polkadot wallet, with account picker)
 - 5-step transaction pipeline (Signed → Submitted → Picked Up → Executed → Confirmed)
-- Live event log with all daemon SSE traffic
+- Live event log with daemon SSE traffic
 
 ## Project Structure
 
@@ -120,11 +120,11 @@ The dashboard shows:
 | `contracts/SubstrateForwarder.sol` | Forwarder for sr25519 meta-transactions |
 | `contracts/ForwarderImport.sol` | Forces Hardhat to compile the OZ forwarder |
 | `lib/statement-store.ts` | People Chain client, proxy signer, statement encode/decode |
-| `scripts/relayer-daemon.ts` | Relayer daemon with SSE, statement store subscription |
+| `scripts/relayer-daemon.ts` | Relayer daemon — statement store subscriber, tx sponsor, `/submit` proxy |
 | `scripts/deploy-preview.ts` | Deploy contracts to Preview Net |
 | `scripts/register-proxy.ts` | One-time proxy account registration on People Chain |
 | `scripts/test-mint.ts` | End-to-end integration test |
-| `frontend/index.html` | Developer dashboard with real-time pipeline tracking |
+| `frontend/index.html` | Self-contained developer dashboard (only needs daemon for `/submit` + `/events`) |
 | `server/index.ts` | Legacy Express relay server (pre-statement-store) |
 | `test/TicketNFT.test.ts` | Unit tests |
 
@@ -132,13 +132,9 @@ The dashboard shows:
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/submit` | Submit a meta-tx (daemon wraps it in a statement via proxy) |
 | `GET` | `/events` | SSE stream — real-time lifecycle events |
-| `GET` | `/api/daemon-info` | Relayer address, balance, proxy, contracts, processed count |
-| `GET` | `/api/config` | Contract addresses + chain ID for frontend |
-| `GET` | `/api/nonce/:address` | EVM forwarder nonce for an address |
-| `GET` | `/api/substrate-nonce/:pubkey` | Substrate forwarder nonce for a public key |
-| `POST` | `/submit` | Submit a meta-tx (daemon wraps it in a statement) |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Health check (relayer address, balance, proxy, processed count) |
 
 ### SSE Events
 
@@ -167,9 +163,14 @@ All events carry a `correlationId` (`type:from:deadline`) for tracking a specifi
 | 7 | mintDeadline | TicketNFT (on-chain) |
 | 8 | Soulbound (non-transferable) | TicketNFT (on-chain) |
 
-## Deployment (Railway)
+## Deployment
 
-The daemon serves both the API and the frontend on the same port, so a single Railway service is all you need.
+The daemon and frontend are separate services:
+
+- **Daemon:** Runs as a background service (e.g. on Railway, a VPS, etc.). Only exposes `/submit`, `/events`, `/health`.
+- **Frontend:** Static HTML — serve from any static host (GitHub Pages, Vercel, Netlify, `npx serve frontend`, or just open `index.html` locally).
+
+### Daemon (Railway example)
 
 1. **Install Railway CLI and login:**
    ```bash
@@ -204,7 +205,15 @@ The daemon serves both the API and the frontend on the same port, so a single Ra
    railway domain
    ```
 
-The frontend's `DAEMON_URL` defaults to `window.location.origin`, so it works automatically on Railway. For local development, add `?daemon=http://localhost:3001` as a query parameter to override.
+### Frontend
+
+Serve the `frontend/` directory from any static host. Point it at the daemon with the `?daemon=` query parameter:
+
+```
+https://your-frontend.example.com?daemon=https://your-daemon.railway.app
+```
+
+For local development: `npx serve frontend -l 8080` and open `http://localhost:8080?daemon=http://localhost:3001`.
 
 ## Network
 

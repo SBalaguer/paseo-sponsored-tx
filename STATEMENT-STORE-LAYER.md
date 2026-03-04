@@ -33,13 +33,13 @@ We use statements as a **transport layer for meta-transaction requests**. The fl
    ┌──────────┐         ┌─────────┐    ┌──────────────┐    ┌───────────┐
    │ Frontend  │──Path A→│ People  │    │   Relayer    │───→│ Asset Hub │
    │ (browser) │         │ Chain   │    │   Daemon     │    │ (eth-rpc) │
-   │           │──Path B→│ WS RPC  │    │              │    │           │
-   └──────────┘    ↓     └─────────┘    └──────────────┘    └───────────┘
-              Relayer                         ↑
-              /submit                    Picks up statements,
-              endpoint                   verifies meta-tx,
-              (proxy signs               executes via forwarder
-               & submits)
+   │           │──Path B─────────────→──│ POST /submit │    │           │
+   └──────────┘         └─────────┘    └──────────────┘    └───────────┘
+        │                                    ↑
+        │ (config, nonces,             Picks up statements,
+        │  contract calls              verifies meta-tx,
+        │  go direct to RPC)           executes via forwarder
+        └──→ Asset Hub eth-rpc
 ```
 
 ## Statement SCALE Format

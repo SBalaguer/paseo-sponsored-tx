@@ -9,8 +9,6 @@
  */
 
 import * as http from "http";
-import * as fs from "fs";
-import * as path from "path";
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
 import {
@@ -336,30 +334,6 @@ function startHttpServer(
       return;
     }
 
-    // Daemon info endpoint
-    if (req.method === "GET" && req.url === "/api/daemon-info") {
-      try {
-        const balance = await provider.getBalance(relayerWallet.address);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            relayer: relayerWallet.address,
-            balance: ethers.formatEther(balance),
-            proxySS58: proxySigner.ss58,
-            forwarderAddress: FORWARDER_ADDRESS,
-            substrateForwarderAddress: SUBSTRATE_FORWARDER_ADDRESS,
-            ticketNFTAddress: TICKET_NFT_ADDRESS,
-            peopleChainWs: PEOPLE_WS_URI,
-            processedCount,
-          }),
-        );
-      } catch (err: any) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-      return;
-    }
-
     if (req.method === "POST" && req.url === "/submit") {
       let body = "";
       req.on("data", (chunk) => (body += chunk));
@@ -428,81 +402,6 @@ function startHttpServer(
       return;
     }
 
-    // Config endpoint for frontend
-    if (req.method === "GET" && req.url === "/api/config") {
-      const network = await provider.getNetwork();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          forwarderAddress: FORWARDER_ADDRESS,
-          substrateForwarderAddress: SUBSTRATE_FORWARDER_ADDRESS,
-          ticketNFTAddress: TICKET_NFT_ADDRESS,
-          chainId: Number(network.chainId),
-          rpcUrl: ASSET_HUB_ETH_RPC,
-        }),
-      );
-      return;
-    }
-
-    // Nonce endpoints for frontend
-    if (req.method === "GET" && req.url?.startsWith("/api/nonce/")) {
-      const address = req.url.split("/api/nonce/")[1];
-      try {
-        const nonce = await forwarder.nonces(address);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ nonce: nonce.toString() }));
-      } catch (err: any) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-      return;
-    }
-
-    if (req.method === "GET" && req.url?.startsWith("/api/substrate-nonce/")) {
-      const pubkey = req.url.split("/api/substrate-nonce/")[1];
-      try {
-        const nonce = await substrateForwarder.substrateNonces(pubkey);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ nonce: nonce.toString() }));
-      } catch (err: any) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-      return;
-    }
-
-    // Serve frontend static files
-    const frontendDir = path.resolve(process.cwd(), "frontend");
-    const requestedPath = req.url === "/" ? "/index.html" : req.url || "/index.html";
-    const filePath = path.join(frontendDir, requestedPath);
-
-    // Prevent directory traversal
-    if (!filePath.startsWith(frontendDir)) {
-      res.writeHead(403);
-      res.end("Forbidden");
-      return;
-    }
-
-    try {
-      const stat = fs.statSync(filePath);
-      if (stat.isFile()) {
-        const ext = path.extname(filePath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          ".html": "text/html",
-          ".js": "application/javascript",
-          ".css": "text/css",
-          ".json": "application/json",
-          ".png": "image/png",
-          ".svg": "image/svg+xml",
-        };
-        res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream" });
-        fs.createReadStream(filePath).pipe(res);
-        return;
-      }
-    } catch {
-      // File not found — fall through to 404
-    }
-
     res.writeHead(404);
     res.end("Not found");
   });
@@ -512,7 +411,6 @@ function startHttpServer(
     log("HTTP", `POST /submit  — proxy statement submission`);
     log("HTTP", `GET  /events  — SSE event stream`);
     log("HTTP", `GET  /health  — daemon health check`);
-    log("HTTP", `GET  /api/daemon-info — system info`);
   });
 
   return server;
