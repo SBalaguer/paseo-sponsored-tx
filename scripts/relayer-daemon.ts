@@ -173,7 +173,29 @@ async function executeEcdsaMetaTx(
   }
 
   log("EXEC", `[${requestId}] Executing via forwarder...`);
-  const tx = await forwarder.execute(forwardRequest, { gasLimit: 1_000_000 });
+  let tx: any;
+  try {
+    tx = await forwarder.execute(forwardRequest, { gasLimit: 1_000_000 });
+  } catch (sendErr: any) {
+    if (sendErr.message?.includes("Transaction Already Imported")) {
+      log("EXEC", `[${requestId}] Tx accepted (Already Imported) — polling for confirmation...`);
+      broadcastSSE("tx:submitted", { correlationId: cid, txHash: "pending", from: metaTx.from });
+      const startNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 6000));
+        const currentNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
+        if (currentNonce > startNonce) {
+          log("EXEC", `[${requestId}] Confirmed (nonce ${startNonce} → ${currentNonce})`);
+          broadcastSSE("tx:confirmed", { correlationId: cid, txHash: "confirmed-via-nonce", from: metaTx.from });
+          return;
+        }
+      }
+      log("EXEC", `[${requestId}] Timed out waiting for confirmation`);
+      broadcastSSE("tx:failed", { correlationId: cid, reason: "timeout waiting for confirmation", from: metaTx.from });
+      return;
+    }
+    throw sendErr;
+  }
   log("EXEC", `[${requestId}] Tx submitted: ${tx.hash}`);
   broadcastSSE("tx:submitted", { correlationId: cid, txHash: tx.hash, from: metaTx.from });
   const receipt = await tx.wait();
@@ -217,9 +239,31 @@ async function executeSr25519MetaTx(
   }
 
   log("EXEC", `[${requestId}] Executing via substrateForwarder...`);
-  const tx = await substrateForwarder.execute(forwardRequest, {
-    gasLimit: 5_000_000_000,
-  });
+  let tx: any;
+  try {
+    tx = await substrateForwarder.execute(forwardRequest, {
+      gasLimit: 5_000_000_000,
+    });
+  } catch (sendErr: any) {
+    if (sendErr.message?.includes("Transaction Already Imported")) {
+      log("EXEC", `[${requestId}] Tx accepted (Already Imported) — polling for confirmation...`);
+      broadcastSSE("tx:submitted", { correlationId: cid, txHash: "pending", from: metaTx.from });
+      const startNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 6000));
+        const currentNonce = await provider.getTransactionCount(relayerWallet.address, "latest");
+        if (currentNonce > startNonce) {
+          log("EXEC", `[${requestId}] Confirmed (nonce ${startNonce} → ${currentNonce})`);
+          broadcastSSE("tx:confirmed", { correlationId: cid, txHash: "confirmed-via-nonce", from: metaTx.from });
+          return;
+        }
+      }
+      log("EXEC", `[${requestId}] Timed out waiting for confirmation`);
+      broadcastSSE("tx:failed", { correlationId: cid, reason: "timeout waiting for confirmation", from: metaTx.from });
+      return;
+    }
+    throw sendErr;
+  }
   log("EXEC", `[${requestId}] Tx submitted: ${tx.hash}`);
   broadcastSSE("tx:submitted", { correlationId: cid, txHash: tx.hash, from: metaTx.from });
   const receipt = await tx.wait();
