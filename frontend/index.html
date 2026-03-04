@@ -141,12 +141,45 @@
     .step.done .step-icon { border-color: #10b981; color: #10b981; background: #064e3b; }
     .step.active .step-icon { border-color: #f59e0b; color: #f59e0b; background: #451a03; animation: pulse 1.5s infinite; }
     .step.failed .step-icon { border-color: #ef4444; color: #ef4444; background: #450a0a; }
+    .step.skipped .step-icon { border-color: #555; color: #555; background: #1a1a1a; }
     .step-text { font-size: 0.8rem; padding-top: 2px; }
     .step-text .step-label { color: #ccc; }
     .step.done .step-label { color: #10b981; }
     .step.active .step-label { color: #f59e0b; }
     .step.failed .step-label { color: #ef4444; }
+    .step.skipped .step-label { color: #555; text-decoration: line-through; }
+    .step.skipped .step-detail { color: #555; }
     .step-detail { font-size: 0.7rem; color: #666; margin-top: 2px; }
+
+    /* Fork: two-leg path split */
+    .path-fork { display: none; margin: 0.3rem 0 0.3rem 0; }
+    .path-fork.active { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .path-leg {
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 0.6rem 0.5rem;
+      position: relative;
+    }
+    .path-leg .path-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.4rem;
+      color: #666;
+    }
+    .path-leg.path-active { border-color: #10b981; }
+    .path-leg.path-active .path-title { color: #10b981; }
+    .path-leg.path-failed { border-color: #ef4444; opacity: 0.6; }
+    .path-leg.path-failed .path-title { color: #ef4444; }
+    .path-leg .step { padding: 0.3rem 0; }
+    .path-leg .step:last-child::after { display: none; }
+    .path-leg .step::after { left: 11px; top: 24px; bottom: -6px; }
+
+    /* Hide connector line from last step before fork */
+    #step-sign-stmt::after { display: none; }
+    /* Hide connector from fork to next shared step — the fork box provides visual continuity */
+    .path-fork + .step { margin-top: 0.3rem; }
 
     /* Right column: event log */
     .right-col {
@@ -292,20 +325,50 @@
       <!-- Pipeline stepper -->
       <div class="card pipeline" id="pipelineCard">
         <h2>Transaction Pipeline</h2>
-        <div class="step" id="step-signed">
-          <div class="step-icon">1</div>
+
+        <!-- Signing steps (linear) -->
+        <div class="step" id="step-sign-mint">
+          <div class="step-icon">1a</div>
           <div class="step-text">
-            <div class="step-label">Signed</div>
-            <div class="step-detail" id="step-signed-detail"></div>
+            <div class="step-label">Mint Signature</div>
+            <div class="step-detail" id="step-sign-mint-detail">Authorizes the mint call on Asset Hub</div>
           </div>
         </div>
-        <div class="step" id="step-submitted">
-          <div class="step-icon">2</div>
+        <div class="step" id="step-sign-stmt">
+          <div class="step-icon">1b</div>
           <div class="step-text">
-            <div class="step-label">Statement Submitted</div>
-            <div class="step-detail" id="step-submitted-detail"></div>
+            <div class="step-label">Statement Signature</div>
+            <div class="step-detail" id="step-sign-stmt-detail">Proves authorship for People Chain gossip</div>
           </div>
         </div>
+
+        <!-- Fork: Path A vs Path B -->
+        <div class="path-fork" id="pathFork">
+          <!-- Path A: Direct -->
+          <div class="path-leg" id="pathA">
+            <div class="path-title">Path A — Direct</div>
+            <div class="step" id="step-pathA-submit">
+              <div class="step-icon">2</div>
+              <div class="step-text">
+                <div class="step-label">Submit to People Chain</div>
+                <div class="step-detail" id="step-pathA-submit-detail">WebSocket RPC to node</div>
+              </div>
+            </div>
+          </div>
+          <!-- Path B: Proxy -->
+          <div class="path-leg" id="pathB">
+            <div class="path-title">Path B — Proxy</div>
+            <div class="step" id="step-pathB-submit">
+              <div class="step-icon">2</div>
+              <div class="step-text">
+                <div class="step-label">Submit via Daemon</div>
+                <div class="step-detail" id="step-pathB-submit-detail">Daemon wraps with proxy key</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shared steps after fork -->
         <div class="step" id="step-received">
           <div class="step-icon">3</div>
           <div class="step-text">
@@ -346,6 +409,137 @@
   <script>
     // --- Configuration ---
     const DAEMON_URL = 'http://localhost:3001';
+    const PEOPLE_WS_URI = 'wss://previewnet.substrate.dev/people';
+    const TOPIC_HASH = '7152443448ca4caafe2e5a61a03259dfadd1a99813095f883a7084758fc4f65c';
+
+    // --- SCALE Encoding (ported from lib/statement-store.ts) ---
+
+    const FIELD_PROOF = 0;
+    const FIELD_PRIORITY = 2;
+    const FIELD_TOPIC1 = 4;
+    const FIELD_DATA = 8;
+    const PROOF_SR25519 = 0;
+    const STMT_PRIORITY = BigInt('0xFFFFFFFF00000001');
+
+    function stmtEncodeCompact(value) {
+      if (value < 64) return new Uint8Array([(value << 2)]);
+      if (value < 16384) {
+        const v = (value << 2) | 1;
+        return new Uint8Array([v & 0xff, (v >> 8) & 0xff]);
+      }
+      const v = (value << 2) | 2;
+      return new Uint8Array([v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]);
+    }
+
+    function stmtEncodeU64LE(value) {
+      const buf = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) {
+        buf[i] = Number((value >> BigInt(i * 8)) & BigInt(0xff));
+      }
+      return buf;
+    }
+
+    function stmtHexToBytes(hex) {
+      const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+      const arr = new Uint8Array(clean.length / 2);
+      for (let i = 0; i < arr.length; i++) {
+        arr[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+      }
+      return arr;
+    }
+
+    function stmtBytesToHex(arr) {
+      return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function stmtEncodeUnsignedFields(topicHash, data) {
+      const topicBytes = stmtHexToBytes(topicHash);
+      const dataLenCompact = stmtEncodeCompact(data.length);
+      const fieldCount = stmtEncodeCompact(3);
+
+      const priorityField = new Uint8Array(1 + 8);
+      priorityField[0] = FIELD_PRIORITY;
+      priorityField.set(stmtEncodeU64LE(STMT_PRIORITY), 1);
+
+      const topicField = new Uint8Array(1 + 32);
+      topicField[0] = FIELD_TOPIC1;
+      topicField.set(topicBytes, 1);
+
+      const dataField = new Uint8Array(1 + dataLenCompact.length + data.length);
+      dataField[0] = FIELD_DATA;
+      dataField.set(dataLenCompact, 1);
+      dataField.set(data, 1 + dataLenCompact.length);
+
+      const total = fieldCount.length + priorityField.length + topicField.length + dataField.length;
+      const result = new Uint8Array(total);
+      let off = 0;
+      result.set(fieldCount, off); off += fieldCount.length;
+      result.set(priorityField, off); off += priorityField.length;
+      result.set(topicField, off); off += topicField.length;
+      result.set(dataField, off);
+      return result;
+    }
+
+    function assembleSignedStatement(publicKeyHex, signatureHex, fieldsBytes) {
+      const sig = stmtHexToBytes(signatureHex);
+      const pubkey = stmtHexToBytes(publicKeyHex);
+
+      // Proof field: variant 0, sub-variant 0 (sr25519), sig(64) + pubkey(32)
+      const proofField = new Uint8Array(1 + 1 + 64 + 32);
+      proofField[0] = FIELD_PROOF;
+      proofField[1] = PROOF_SR25519;
+      proofField.set(sig.slice(0, 64), 2);
+      proofField.set(pubkey.slice(0, 32), 66);
+
+      // Full statement: compact(4 fields) + proof + fieldsBytes
+      const signedFieldCount = stmtEncodeCompact(4);
+      const total = signedFieldCount.length + proofField.length + fieldsBytes.length;
+      const result = new Uint8Array(total);
+      let off = 0;
+      result.set(signedFieldCount, off); off += signedFieldCount.length;
+      result.set(proofField, off); off += proofField.length;
+      result.set(fieldsBytes, off);
+
+      return '0x' + stmtBytesToHex(result);
+    }
+
+    function submitStatementDirect(statementHex) {
+      return new Promise((resolve, reject) => {
+        let ws;
+        try { ws = new WebSocket(PEOPLE_WS_URI); }
+        catch (e) { return reject(e); }
+
+        const timeout = setTimeout(() => {
+          ws.close();
+          reject(new Error('WebSocket timeout'));
+        }, 15000);
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0', method: 'statement_submit', params: [statementHex], id: 1,
+          }));
+        };
+
+        ws.onmessage = (event) => {
+          clearTimeout(timeout);
+          try {
+            const msg = JSON.parse(event.data);
+            ws.close();
+            if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
+            else resolve(msg.result);
+          } catch (e) {
+            ws.close();
+            reject(e);
+          }
+        };
+
+        ws.onerror = (err) => {
+          clearTimeout(timeout);
+          ws.close();
+          reject(new Error('WebSocket error'));
+        };
+      });
+    }
 
     let provider, signer, userAddress;
     let config = null;
@@ -426,21 +620,24 @@
 
     // --- Pipeline stepper ---
 
+    // Shared steps after the fork (mapped from SSE events)
     const STEP_MAP = {
-      'statement:submitted': 'step-submitted',
+      'statement:submitted': null, // handled by fork UI
       'statement:received': 'step-received',
       'tx:verifying': 'step-executed',
       'tx:submitted': 'step-executed',
       'tx:confirmed': 'step-confirmed',
-      'tx:failed': null, // special handling
+      'tx:failed': null,
     };
+
+    // The shared post-fork steps in order
+    const SHARED_STEPS = ['step-received', 'step-executed', 'step-confirmed'];
 
     function routeToStepper(event, data) {
       if (!currentCorrelationId) return;
       if (data.correlationId !== currentCorrelationId) return;
 
       if (event === 'tx:failed') {
-        // Mark the current active step as failed
         document.querySelectorAll('.step.active').forEach(s => {
           s.classList.remove('active');
           s.classList.add('failed');
@@ -454,11 +651,8 @@
       const stepId = STEP_MAP[event];
       if (!stepId) return;
 
-      // Mark previous steps as done
-      const steps = ['step-signed', 'step-submitted', 'step-received', 'step-executed', 'step-confirmed'];
-      const targetIdx = steps.indexOf(stepId);
-
-      steps.forEach((id, idx) => {
+      const targetIdx = SHARED_STEPS.indexOf(stepId);
+      SHARED_STEPS.forEach((id, idx) => {
         const el = document.getElementById(id);
         if (idx < targetIdx) {
           el.classList.remove('active');
@@ -469,11 +663,8 @@
         }
       });
 
-      // Set detail text
       const detail = document.getElementById(stepId + '-detail');
-      if (event === 'statement:submitted') {
-        detail.textContent = `Status: ${data.status || 'new'}`;
-      } else if (event === 'statement:received') {
+      if (event === 'statement:received') {
         detail.textContent = 'Statement picked up from People Chain';
       } else if (event === 'tx:verifying') {
         detail.textContent = 'Verifying signature...';
@@ -485,14 +676,36 @@
         mintBtn.textContent = 'Confirmed!';
       }
 
-      // Update daemon:health processed count
       if (event === 'daemon:health' && data.processedCount !== undefined) {
         document.getElementById('infoProcessed').textContent = data.processedCount;
       }
     }
 
     function resetPipeline() {
-      ['step-signed', 'step-submitted', 'step-received', 'step-executed', 'step-confirmed'].forEach(id => {
+      // Reset signing steps
+      ['step-sign-mint', 'step-sign-stmt'].forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.remove('done', 'active', 'failed', 'skipped');
+        const detail = document.getElementById(id + '-detail');
+        if (id === 'step-sign-mint') detail.textContent = 'Authorizes the mint call on Asset Hub';
+        else detail.textContent = 'Proves authorship for People Chain gossip';
+      });
+
+      // Reset fork
+      document.getElementById('pathFork').classList.remove('active');
+      ['pathA', 'pathB'].forEach(id => {
+        const leg = document.getElementById(id);
+        leg.classList.remove('path-active', 'path-failed');
+      });
+      ['step-pathA-submit', 'step-pathB-submit'].forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.remove('done', 'active', 'failed', 'skipped');
+      });
+      document.getElementById('step-pathA-submit-detail').textContent = 'WebSocket RPC to node';
+      document.getElementById('step-pathB-submit-detail').textContent = 'Daemon wraps with proxy key';
+
+      // Reset shared steps
+      SHARED_STEPS.forEach(id => {
         const el = document.getElementById(id);
         el.classList.remove('done', 'active', 'failed');
         document.getElementById(id + '-detail').textContent = '';
@@ -724,16 +937,25 @@
 
         const signature = await signer.signTypedData(domain, types, message);
 
-        // Show pipeline, mark step 1 done
+        // Show pipeline, mark signing steps done (MetaMask: single EIP-712 sig, no statement sig)
         resetPipeline();
         document.getElementById('pipelineCard').classList.add('active');
-        document.getElementById('step-signed').classList.add('done');
-        document.getElementById('step-signed-detail').textContent = 'EIP-712 signature obtained';
+        document.getElementById('step-sign-mint').classList.add('done');
+        document.getElementById('step-sign-mint-detail').textContent = 'EIP-712 signature obtained';
+        document.getElementById('step-sign-stmt').classList.add('done');
+        document.getElementById('step-sign-stmt-detail').textContent = 'N/A — proxy signs statement for EVM users';
 
         const metaTxRequest = {
           type: 'ecdsa', from: userAddress, to: cfg.ticketNFTAddress,
           value: '0', gas: '500000', deadline: deadline.toString(), data: mintData, signature,
         };
+
+        // Show fork — MetaMask always uses Path B, Path A skipped
+        document.getElementById('pathFork').classList.add('active');
+        document.getElementById('step-pathA-submit').classList.add('skipped');
+        document.getElementById('step-pathA-submit-detail').textContent = 'EVM wallets use proxy path';
+        document.getElementById('step-pathB-submit').classList.add('active');
+        document.getElementById('step-pathB-submit-detail').textContent = 'Sending to daemon...';
 
         mintBtn.textContent = 'Submitting...';
         const submitRes = await fetch(`${DAEMON_URL}/submit`, {
@@ -744,12 +966,14 @@
         const result = await submitRes.json();
         if (!submitRes.ok) throw new Error(result.error || 'Submit failed');
 
+        document.getElementById('step-pathB-submit').classList.remove('active');
+        document.getElementById('step-pathB-submit').classList.add('done');
+        document.getElementById('step-pathB-submit-detail').textContent = 'Proxy signed & submitted';
+        document.getElementById('pathB').classList.add('path-active');
+
         currentCorrelationId = result.correlationId;
         mintBtn.textContent = 'Awaiting Execution...';
-
-        // Mark step 2 as active (will be updated by SSE)
-        document.getElementById('step-submitted').classList.add('active');
-        document.getElementById('step-submitted-detail').textContent = `Status: ${result.status}`;
+        document.getElementById('step-received').classList.add('active');
       } catch (e) {
         alert('Mint failed: ' + e.message);
         mintBtn.disabled = false;
@@ -760,7 +984,6 @@
     async function mintViaPolkadot() {
       const mintBtn = document.getElementById('mintBtn');
       mintBtn.disabled = true;
-      mintBtn.textContent = 'Signing...';
 
       try {
         const cfg = await fetchConfig();
@@ -783,35 +1006,116 @@
         );
 
         if (!polkadotInjector.signer?.signRaw) throw new Error('Wallet does not support signRaw');
+
+        // Show pipeline
+        resetPipeline();
+        document.getElementById('pipelineCard').classList.add('active');
+
+        // --- Signature 1/2: Mint authorization ---
+        mintBtn.textContent = 'Sign mint request (1/2)...';
+        document.getElementById('step-sign-mint').classList.add('active');
+        document.getElementById('step-sign-mint-detail').textContent = 'Wallet will prompt — this authorizes the mint call';
+
         const signResult = await polkadotInjector.signer.signRaw({
           address: polkadotAccount.address, data: innerMessage, type: 'bytes',
         });
 
-        // Show pipeline, mark step 1 done
-        resetPipeline();
-        document.getElementById('pipelineCard').classList.add('active');
-        document.getElementById('step-signed').classList.add('done');
-        document.getElementById('step-signed-detail').textContent = 'sr25519 signature obtained';
+        document.getElementById('step-sign-mint').classList.remove('active');
+        document.getElementById('step-sign-mint').classList.add('done');
+        document.getElementById('step-sign-mint-detail').textContent = 'Mint call authorized (sr25519)';
 
         const metaTxRequest = {
           type: 'sr25519', from: pubkeyHex, to: cfg.ticketNFTAddress,
           gas: gasLimit.toString(), deadline: deadline.toString(), data: callData, signature: signResult.signature,
         };
 
-        mintBtn.textContent = 'Submitting...';
-        const submitRes = await fetch(`${DAEMON_URL}/submit`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(metaTxRequest),
+        // --- Signature 2/2: Statement proof ---
+        mintBtn.textContent = 'Sign statement (2/2)...';
+        document.getElementById('step-sign-stmt').classList.add('active');
+        document.getElementById('step-sign-stmt-detail').textContent = 'Wallet will prompt — this proves you authored the statement';
+
+        const jsonBytes = new TextEncoder().encode(JSON.stringify(metaTxRequest));
+        const unsignedEncoded = stmtEncodeUnsignedFields(TOPIC_HASH, jsonBytes);
+        const compactPrefixLen = stmtEncodeCompact(3).length;
+        const fieldsBytes = unsignedEncoded.slice(compactPrefixLen);
+
+        // Use type:'payload' to avoid <Bytes> wrapping — the statement store
+        // verifies against raw fieldsBytes, not <Bytes>-wrapped bytes.
+        // (type:'bytes' would wrap, causing badProof)
+        const stmtSignResult = await polkadotInjector.signer.signRaw({
+          address: polkadotAccount.address,
+          data: '0x' + stmtBytesToHex(fieldsBytes),
+          type: 'payload',
         });
-        const result = await submitRes.json();
-        if (!submitRes.ok) throw new Error(result.error || 'Submit failed');
 
-        currentCorrelationId = result.correlationId;
-        mintBtn.textContent = 'Awaiting Execution...';
+        document.getElementById('step-sign-stmt').classList.remove('active');
+        document.getElementById('step-sign-stmt').classList.add('done');
+        document.getElementById('step-sign-stmt-detail').textContent = 'Statement proof signed (sr25519)';
 
-        document.getElementById('step-submitted').classList.add('active');
-        document.getElementById('step-submitted-detail').textContent = `Status: ${result.status}`;
+        // --- Show the fork ---
+        document.getElementById('pathFork').classList.add('active');
+
+        // --- Path A: Direct statement submission to People Chain ---
+        let directSuccess = false;
+        try {
+          mintBtn.textContent = 'Trying direct submission...';
+          document.getElementById('step-pathA-submit').classList.add('active');
+          document.getElementById('step-pathA-submit-detail').textContent = 'Connecting to People Chain...';
+
+          const statementHex = assembleSignedStatement(pubkeyHex, stmtSignResult.signature, fieldsBytes);
+          const wsResult = await submitStatementDirect(statementHex);
+
+          if (wsResult && wsResult.status === 'invalid') {
+            throw new Error(wsResult.reason || 'rejected');
+          }
+
+          // Path A success
+          directSuccess = true;
+          document.getElementById('step-pathA-submit').classList.remove('active');
+          document.getElementById('step-pathA-submit').classList.add('done');
+          document.getElementById('step-pathA-submit-detail').textContent = 'Accepted by People Chain';
+          document.getElementById('pathA').classList.add('path-active');
+
+          // Mark Path B as skipped
+          document.getElementById('step-pathB-submit').classList.add('skipped');
+          document.getElementById('step-pathB-submit-detail').textContent = 'Not needed';
+
+          currentCorrelationId = `${pubkeyHex.slice(0, 10)}-${Date.now()}`;
+          mintBtn.textContent = 'Awaiting Execution...';
+          document.getElementById('step-received').classList.add('active');
+          console.log('[Path A] Statement accepted:', wsResult);
+        } catch (directErr) {
+          // Path A failed — show it visually
+          console.warn('[Path A] Failed:', directErr.message);
+          document.getElementById('step-pathA-submit').classList.remove('active');
+          document.getElementById('step-pathA-submit').classList.add('failed');
+          document.getElementById('step-pathA-submit-detail').textContent = directErr.message;
+          document.getElementById('pathA').classList.add('path-failed');
+        }
+
+        // --- Path B fallback: Submit via daemon proxy ---
+        if (!directSuccess) {
+          mintBtn.textContent = 'Falling back to proxy...';
+          document.getElementById('step-pathB-submit').classList.add('active');
+          document.getElementById('step-pathB-submit-detail').textContent = 'Sending to daemon...';
+
+          const submitRes = await fetch(`${DAEMON_URL}/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(metaTxRequest),
+          });
+          const result = await submitRes.json();
+          if (!submitRes.ok) throw new Error(result.error || 'Submit failed');
+
+          document.getElementById('step-pathB-submit').classList.remove('active');
+          document.getElementById('step-pathB-submit').classList.add('done');
+          document.getElementById('step-pathB-submit-detail').textContent = `Proxy signed & submitted`;
+          document.getElementById('pathB').classList.add('path-active');
+
+          currentCorrelationId = result.correlationId;
+          mintBtn.textContent = 'Awaiting Execution...';
+          document.getElementById('step-received').classList.add('active');
+        }
       } catch (e) {
         alert('Mint failed: ' + e.message);
         mintBtn.disabled = false;
